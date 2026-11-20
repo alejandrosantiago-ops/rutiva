@@ -82,3 +82,51 @@ export function sleepSeries(logs: SleepLog[], end: DateKey, days: number): { dat
 }
 
 export const QUALITY_LABELS = ['', 'Muy mala', 'Mala', 'Regular', 'Buena', 'Excelente'] as const;
+
+/** Minutos dormidos: tiempo entre acostarse y despertar menos lo que tardaste en dormirte. */
+export function sleepDuration(bedtimeAt: string, wakeAt: string, latencyMinutes = 0): number {
+  const inBed = Math.round((new Date(wakeAt).getTime() - new Date(bedtimeAt).getTime()) / 60000);
+  return Math.max(0, inBed - Math.max(0, latencyMinutes));
+}
+
+/** Motivo por el que un registro no es válido, o null si lo es. */
+export function sleepProblem(bedtimeAt: string, wakeAt: string, latencyMinutes = 0): string | null {
+  const inBed = (new Date(wakeAt).getTime() - new Date(bedtimeAt).getTime()) / 60000;
+  if (!(inBed > 0)) return 'La hora de despertar debe ser posterior a la de acostarse';
+  if (inBed < 1) return 'El registro debe durar al menos un minuto';
+  if (inBed > 24 * 60) return 'Un registro no puede superar 24 horas';
+  if (latencyMinutes >= inBed) return 'El tiempo hasta dormirte no puede superar el tiempo en cama';
+  return null;
+}
+
+/** El día de la noche es el día en que te despertaste. */
+export function sleepDateOf(wakeAt: string): DateKey {
+  const d = new Date(wakeAt);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export interface GoalComparison {
+  /** Media − meta, en minutos (negativo = duermes menos de la meta). */
+  diffMinutes: number;
+  /** Suma de lo que faltó para la meta en cada noche registrada. */
+  debtMinutes: number;
+}
+
+export function compareWithGoal(logs: SleepLog[], goalMinutes: number): GoalComparison {
+  if (logs.length === 0) return { diffMinutes: 0, debtMinutes: 0 };
+  const avg = logs.reduce((a, l) => a + l.durationMinutes, 0) / logs.length;
+  return {
+    diffMinutes: avg - goalMinutes,
+    debtMinutes: logs.reduce((a, l) => a + Math.max(0, goalMinutes - l.durationMinutes), 0),
+  };
+}
+
+export const SOURCE_LABELS: Record<SleepLog['source'], { label: string; hint: string }> = {
+  manual: { label: 'Manual', hint: 'Horas introducidas por ti.' },
+  timer: {
+    label: 'Estimado',
+    hint: 'Medido con el temporizador: es el tiempo en cama, no sueño detectado.',
+  },
+  health_connect: { label: 'Health Connect', hint: 'Importado de Health Connect con tu permiso.' },
+  healthkit: { label: 'Apple Salud', hint: 'Importado de Apple Salud con tu permiso.' },
+};

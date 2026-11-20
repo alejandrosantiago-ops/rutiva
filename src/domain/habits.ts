@@ -22,31 +22,87 @@ export function isPausedOn(habit: Habit, date: DateKey): boolean {
   return habit.pauses.some((p) => date >= p.from && (p.to === null || date <= p.to));
 }
 
-/** ¿Le toca al hábito ese día? Considera frecuencia, inicio, fin y pausas. */
+type Rule = Pick<Habit, 'frequency' | 'daysOfWeek' | 'intervalDays' | 'target'>;
+
+/** Regla (frecuencia + meta) vigente en una fecha, teniendo en cuenta las ediciones. */
+export function ruleOn(habit: Habit, date: DateKey): Rule {
+  for (const r of habit.scheduleHistory) if (date <= r.until) return r;
+  return habit;
+}
+
+/** El hábito tal como estaba configurado en esa fecha. */
+export function habitOn(habit: Habit, date: DateKey): Habit {
+  if (habit.scheduleHistory.length === 0) return habit;
+  const r = ruleOn(habit, date);
+  return r === habit ? habit : { ...habit, frequency: r.frequency, daysOfWeek: r.daysOfWeek, intervalDays: r.intervalDays, target: r.target };
+}
+
+export function targetOn(habit: Habit, date: DateKey): number {
+  return ruleOn(habit, date).target;
+}
+
+/**
+ * ¿Le toca al hábito ese día? Considera la fecha de inicio, la de fin, las
+ * pausas (archivar también cuenta como pausa) y la programación vigente ese día.
+ */
 export function isScheduledOn(habit: Habit, date: DateKey): boolean {
+  if (habit.deletedAt) return false;
   if (date < habit.startDate) return false;
   if (habit.endDate && date > habit.endDate) return false;
   if (isPausedOn(habit, date)) return false;
-  switch (habit.frequency) {
+  const rule = ruleOn(habit, date);
+  switch (rule.frequency) {
     case 'daily':
       return true;
     case 'weekly':
-      return habit.daysOfWeek.includes(weekdayOf(date) as Weekday);
+      return rule.daysOfWeek.includes(weekdayOf(date) as Weekday);
     case 'interval':
-      return daysBetween(habit.startDate, date) % Math.max(1, habit.intervalDays) === 0;
+      return daysBetween(habit.startDate, date) % Math.max(1, rule.intervalDays) === 0;
   }
 }
 
 export function isDoneOn(habit: Habit, logs: LogIndex, date: DateKey): boolean {
-  return getValue(logs, habit.id, date) >= habit.target - EPS;
+  return getValue(logs, habit.id, date) >= targetOn(habit, date) - EPS;
 }
 
-export function progressRatio(habit: Habit, value: number): number {
-  return habit.target > 0 ? Math.min(1, value / habit.target) : 0;
+/** Progreso 0…1. Con `date` usa la meta vigente ese día. */
+export function progressRatio(habit: Habit, value: number, date?: DateKey): number {
+  const target = date ? targetOn(habit, date) : habit.target;
+  return target > 0 ? Math.min(1, value / target) : 0;
 }
 
+/**
+ * Hábitos programados ese día. Los archivados se incluyen en fechas pasadas
+ * (archivar abre una pausa desde ese día), así el historial no se pierde.
+ */
 export function habitsForDay(habits: Habit[], date: DateKey): Habit[] {
-  return habits.filter((h) => isActive(h) && isScheduledOn(h, date));
+  return habits.filter((h) => isScheduledOn(h, date));
+}
+
+/**
+ * Calcula el nuevo historial de reglas al editar un hábito. Si cambia la
+ * frecuencia o la meta, la regla anterior queda vigente hasta ayer.
+ */
+export function nextScheduleHistory(habit: Habit, next: Partial<Rule>, today: DateKey): Habit['scheduleHistory'] {
+  const merged: Rule = {
+    frequency: next.frequency ?? habit.frequency,
+    daysOfWeek: next.daysOfWeek ?? habit.daysOfWeek,
+    intervalDays: next.intervalDays ?? habit.intervalDays,
+    target: next.target ?? habit.target,
+  };
+  const changed =
+    merged.frequency !== habit.frequency ||
+    merged.intervalDays !== habit.intervalDays ||
+    merged.target !== habit.target ||
+    [...merged.daysOfWeek].sort().join() !== [...habit.daysOfWeek].sort().join();
+  const yesterday = shiftKey(today, -1);
+  const last = habit.scheduleHistory[habit.scheduleHistory.length - 1];
+  // Sin cambios, hábito que empieza hoy o después, o la regla actual ya solo regía hoy.
+  if (!changed || yesterday < habit.startDate || (last && last.until >= yesterday)) return habit.scheduleHistory;
+  return [
+    ...habit.scheduleHistory,
+    { until: yesterday, frequency: habit.frequency, daysOfWeek: habit.daysOfWeek, intervalDays: habit.intervalDays, target: habit.target },
+  ];
 }
 
 export interface DayProgress {
@@ -63,8 +119,8 @@ export function dayProgress(habits: Habit[], logs: LogIndex, date: DateKey): Day
   let partial = 0;
   for (const h of due) {
     const v = getValue(logs, h.id, date);
-    if (v >= h.target - EPS) completed++;
-    partial += progressRatio(h, v);
+    if (v >= targetOn(h, date) - EPS) completed++;
+    partial += progressRatio(h, v, date);
   }
   return { scheduled: due.length, completed, ratio: partial / due.length };
 }
@@ -108,17 +164,33 @@ export function bestStreak(habit: Habit, logs: LogIndex, today: DateKey): number
  * Los días sin hábitos no rompen la racha; hoy sin terminar tampoco.
  */
 export function perfectDayStreak(habits: Habit[], logs: LogIndex, today: DateKey): number {
-  const active = habits.filter(isActive);
-  if (active.length === 0) return 0;
-  const earliest = active.reduce((m, h) => (h.startDate < m ? h.startDate : m), today);
+  const live = habits.filter((h) => !h.deletedAt);
+  if (live.length === 0) return 0;
+  const earliest = live.reduce((m, h) => (h.startDate < m ? h.startDate : m), today);
   let streak = 0;
   for (let day = today; day >= earliest; day = shiftKey(day, -1)) {
-    const p = dayProgress(active, logs, day);
+    const p = dayProgress(live, logs, day);
     if (p.scheduled === 0) continue;
     if (p.completed === p.scheduled) streak++;
     else if (day !== today) break;
   }
   return streak;
+}
+
+/** Mejor racha histórica de días con todos los hábitos cumplidos. */
+export function bestPerfectDayStreak(habits: Habit[], logs: LogIndex, today: DateKey): number {
+  const live = habits.filter((h) => !h.deletedAt);
+  if (live.length === 0) return 0;
+  const earliest = live.reduce((m, h) => (h.startDate < m ? h.startDate : m), today);
+  let best = 0;
+  let run = 0;
+  for (const day of rangeKeys(earliest, today)) {
+    const p = dayProgress(live, logs, day);
+    if (p.scheduled === 0) continue;
+    if (p.completed === p.scheduled) best = Math.max(best, ++run);
+    else if (day !== today) run = 0;
+  }
+  return best;
 }
 
 export interface HabitStats {

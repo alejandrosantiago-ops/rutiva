@@ -1,7 +1,7 @@
 import * as Crypto from 'expo-crypto';
 import { getDb } from '@/db/client';
-import { computeSleepWindow } from '@/domain/sleep';
-import type { AppSettings, Habit, HabitLog, PausePeriod, SleepLog, WaterLog, Weekday } from '@/domain/types';
+import { sleepDuration } from '@/domain/sleep';
+import type { AppSettings, Habit, HabitLog, HabitRule, PausePeriod, SleepLog, WaterLog, Weekday } from '@/domain/types';
 import type { BackupPayload, Repositories } from '../types';
 
 const now = () => new Date().toISOString();
@@ -28,6 +28,7 @@ interface HabitRow {
   reminder_times: string;
   notification_ids: string;
   pauses: string;
+  schedule_history: string;
   archived: number;
   sort_order: number;
   created_at: string;
@@ -61,8 +62,11 @@ interface SleepRow {
   bedtime_at: string;
   wake_at: string;
   duration_minutes: number;
+  latency_minutes: number;
   quality: number;
   notes: string | null;
+  source: SleepLog['source'];
+  external_id: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -95,6 +99,7 @@ const toHabit = (r: HabitRow): Habit => ({
   reminderTimes: parseJson<string[]>(r.reminder_times, []),
   notificationIds: parseJson<string[]>(r.notification_ids, []),
   pauses: parseJson<PausePeriod[]>(r.pauses, []),
+  scheduleHistory: parseJson<HabitRule[]>(r.schedule_history, []),
   archived: r.archived === 1,
   sortOrder: r.sort_order,
   createdAt: r.created_at,
@@ -127,8 +132,11 @@ const toSleep = (r: SleepRow): SleepLog => ({
   bedtimeAt: r.bedtime_at,
   wakeAt: r.wake_at,
   durationMinutes: r.duration_minutes,
+  latencyMinutes: r.latency_minutes,
   quality: r.quality,
   notes: r.notes,
+  source: r.source,
+  externalId: r.external_id,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   deletedAt: r.deleted_at,
@@ -158,6 +166,7 @@ const HABIT_COLUMNS: Partial<Record<keyof Habit, [string, (v: unknown) => Sql]>>
   reminderTimes: ['reminder_times', json],
   notificationIds: ['notification_ids', json],
   pauses: ['pauses', json],
+  scheduleHistory: ['schedule_history', json],
   archived: ['archived', bool],
   sortOrder: ['sort_order', same],
   deletedAt: ['deleted_at', same],
@@ -182,6 +191,7 @@ export const sqliteRepositories: Repositories = {
         id: uuid(),
         notificationIds: [],
         pauses: [],
+        scheduleHistory: [],
         archived: false,
         sortOrder: (max?.m ?? -1) + 1,
         createdAt: ts,
@@ -301,10 +311,21 @@ export const sqliteRepositories: Repositories = {
     async save(input, id) {
       const db = await getDb();
       const ts = now();
-      const window = computeSleepWindow(input.date, input.bedtime, input.wakeTime);
+      const duration = sleepDuration(input.bedtimeAt, input.wakeAt, input.latencyMinutes);
+      const values = [
+        input.date,
+        input.bedtimeAt,
+        input.wakeAt,
+        duration,
+        Math.max(0, Math.round(input.latencyMinutes)),
+        input.quality,
+        input.notes,
+        input.source,
+        input.externalId ?? null,
+      ];
       let result!: SleepLog;
       await db.withTransactionAsync(async () => {
-        // Si ya existe otra noche con esa fecha, se reemplaza.
+        // Una noche por fecha: si ya existe otra con esa fecha, se reemplaza.
         const clash = await db.getFirstAsync<SleepRow>(
           'SELECT * FROM sleep_logs WHERE date = ? AND deleted_at IS NULL AND id != ?',
           input.date,
@@ -316,28 +337,19 @@ export const sqliteRepositories: Repositories = {
         const finalId = existing?.id ?? uuid();
         if (existing) {
           await db.runAsync(
-            `UPDATE sleep_logs SET date = ?, bedtime_at = ?, wake_at = ?, duration_minutes = ?, quality = ?, notes = ?, updated_at = ?
-             WHERE id = ?`,
-            input.date,
-            window.bedtimeAt,
-            window.wakeAt,
-            window.durationMinutes,
-            input.quality,
-            input.notes,
+            `UPDATE sleep_logs SET date = ?, bedtime_at = ?, wake_at = ?, duration_minutes = ?, latency_minutes = ?, quality = ?,
+               notes = ?, source = ?, external_id = ?, updated_at = ? WHERE id = ?`,
+            ...values,
             ts,
             finalId,
           );
         } else {
           await db.runAsync(
-            `INSERT INTO sleep_logs (id, date, bedtime_at, wake_at, duration_minutes, quality, notes, created_at, updated_at, deleted_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+            `INSERT INTO sleep_logs (date, bedtime_at, wake_at, duration_minutes, latency_minutes, quality, notes, source, external_id,
+               id, created_at, updated_at, deleted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+            ...values,
             finalId,
-            input.date,
-            window.bedtimeAt,
-            window.wakeAt,
-            window.durationMinutes,
-            input.quality,
-            input.notes,
             ts,
             ts,
           );
@@ -384,14 +396,14 @@ export const sqliteRepositories: Repositories = {
     ]);
     return {
       app: 'rutiva',
-      version: 2,
+      version: 3,
       exportedAt: now(),
       habits: habits.map((h) => ({ ...h, notificationIds: [] })),
       habitLogs,
       waterLogs,
       sleepLogs,
       // Los ids de notificaciones y el cronómetro son propios de este dispositivo.
-      settings: { ...settings, bedtimeNotificationId: null, waterNotificationIds: [], activeTimer: null },
+      settings: { ...settings, bedtimeNotificationId: null, waterNotificationIds: [], activeTimer: null, sleepSession: null },
     };
   },
 

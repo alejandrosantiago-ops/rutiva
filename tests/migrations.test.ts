@@ -63,6 +63,30 @@ test('v1 → v2 conserva hábitos e historial y mapea los campos', () => {
   assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 2);
 });
 
+test('v2 → v3: archivados pasan a pausa y el sueño recibe origen', () => {
+  const db = new DatabaseSync(':memory:');
+  migrate(db, 2);
+  const ts = '2026-11-10T12:00:00.000Z';
+  const insert = db.prepare(`INSERT INTO habits (id, name, icon, color, days_of_week, start_date, archived, pauses, created_at, updated_at)
+    VALUES (?, 'x', 'target', '#000', '[0,1,2,3,4,5,6]', '2026-11-01', ?, ?, ?, ?)`);
+  insert.run('arch', 1, '[]', ts, ts);
+  insert.run('arch-paused', 1, '[{"from":"2026-11-05","to":null}]', ts, ts);
+  insert.run('live', 0, '[]', ts, ts);
+  db.prepare(`INSERT INTO sleep_logs (id, date, bedtime_at, wake_at, duration_minutes, created_at, updated_at)
+    VALUES ('s', '2026-11-10', 'a', 'b', 480, ?, ?)`).run(ts, ts);
+
+  migrate(db, 3);
+
+  const pauses = (id: string) => JSON.parse((db.prepare('SELECT pauses FROM habits WHERE id = ?').get(id) as { pauses: string }).pauses);
+  assert.deepEqual(pauses('arch'), [{ from: '2026-11-10', to: null, reason: 'archive' }]);
+  assert.equal(pauses('arch-paused').length, 1, 'ya estaba en pausa: no se duplica');
+  assert.deepEqual(pauses('live'), []);
+  const sleep = db.prepare('SELECT source, latency_minutes, external_id FROM sleep_logs').get() as Record<string, unknown>;
+  assert.deepEqual({ ...sleep }, { source: 'manual', latency_minutes: 0, external_id: null });
+  const h = db.prepare('SELECT schedule_history FROM habits WHERE id = ?').get('live') as { schedule_history: string };
+  assert.equal(h.schedule_history, '[]');
+});
+
 test('instalación nueva aplica todas las migraciones', () => {
   const db = new DatabaseSync(':memory:');
   migrate(db, MIGRATIONS.length);

@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from 'react-native-reanimated';
 import { Bell, Check, Flame, Pause, Plus, Timer } from 'lucide-react-native';
 import type { DateKey, Habit } from '@/domain/types';
+import { todayKey } from '@/domain/dates';
 import { describeFrequency, describeProgress, describeRemaining, describeTarget, isPaused, progressRatio } from '@/domain/habits';
 import { isWaterHabit } from '@/domain/water';
 import { useTheme } from '@/theme/colors';
@@ -105,7 +106,7 @@ export const HabitCard = memo(function HabitCard({
 
   let subtitle: string;
   if (showFrequency) subtitle = `${describeFrequency(habit)} · ${describeTarget(habit)}`;
-  else if (habit.trackingType === 'check') subtitle = done ? 'Completado' : (habit.description ?? 'Pendiente');
+  else if (habit.trackingType === 'check') subtitle = done ? 'Completado' : date < todayKey() ? 'No completado' : (habit.description ?? 'Pendiente');
   else {
     const remaining = describeRemaining(habit, value);
     subtitle = remaining ? `${describeProgress(habit, value)} · ${remaining}` : describeProgress(habit, value);

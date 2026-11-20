@@ -4,7 +4,7 @@ import { router } from 'expo-router';
 import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { CalendarCheck, Plus } from 'lucide-react-native';
 import type { DateKey } from '@/domain/types';
-import { currentStreak, getValue, habitsForDay, isDoneOn } from '@/domain/habits';
+import { currentStreak, getValue, habitOn, habitsForDay, isDoneOn } from '@/domain/habits';
 import { useHabitStore } from '@/stores/useHabitStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useLogIndex } from '@/hooks/useLogIndex';
@@ -47,7 +47,7 @@ export function DayHabitList({ date, today, emptyCta = true }: { date: DateKey; 
     list.map((h, i) => (
       <Animated.View key={h.id} entering={FadeInDown.delay(i * 45).springify().damping(18)} layout={LinearTransition.springify().damping(20)}>
         <HabitCard
-          habit={h}
+          habit={habitOn(h, date)}
           date={date}
           value={getValue(logs, h.id, date)}
           streak={date === today ? currentStreak(h, logs, today) : 0}

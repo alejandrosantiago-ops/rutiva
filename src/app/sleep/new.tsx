@@ -1,48 +1,78 @@
 import { useMemo, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
-import { confirmAction, showError } from '@/lib/dialogs';
 import { useLocalSearchParams } from 'expo-router';
-import { goBack } from '@/lib/navigation';
-import { AlarmClock, BedDouble, Check, Moon, Trash } from 'lucide-react-native';
+import { AlarmClock, BedDouble, Check, Hourglass, Info, Moon, Trash } from 'lucide-react-native';
 import { formatDuration, formatEs, formatIsoTime, shiftKey, WEEKDAY_SHORT, weekdayOf } from '@/domain/dates';
-import { computeSleepWindow, QUALITY_LABELS } from '@/domain/sleep';
-import type { DateKey } from '@/domain/types';
+import { computeSleepWindow, QUALITY_LABELS, SOURCE_LABELS, sleepDateOf, sleepDuration, sleepProblem } from '@/domain/sleep';
+import type { DateKey, SleepSource } from '@/domain/types';
 import { useSleepStore } from '@/stores/useSleepStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
+import { sleepSession } from '@/stores/sleepSession';
 import { useToday } from '@/hooks/useToday';
 import { useTheme } from '@/theme/colors';
 import { haptics } from '@/lib/haptics';
+import { confirmAction, showError } from '@/lib/dialogs';
+import { goBack } from '@/lib/navigation';
 import { ModalScreen } from '@/components/ui/layout';
 import { Button, Card, PressableScale, Txt, cx } from '@/components/ui/primitives';
-import { FieldLabel, TextField, TimeField } from '@/components/ui/form';
+import { FieldLabel, Stepper, TextField, TimeField } from '@/components/ui/form';
 
+/**
+ * Registro de sueño.
+ * - Sin parámetros: registro manual.
+ * - ?id=…: corregir un registro existente.
+ * - ?start=…&end=…: revisar una sesión del temporizador antes de guardarla.
+ */
 export default function SleepFormScreen() {
   const t = useTheme();
   const today = useToday();
-  const { id } = useLocalSearchParams<{ id?: string }>();
+  const params = useLocalSearchParams<{ id?: string; start?: string; end?: string }>();
   const logs = useSleepStore((s) => s.logs);
   const { save, remove } = useSleepStore.getState();
   const goal = useSettingsStore((s) => s.settings.sleepGoalMinutes);
-  const existing = id ? logs.find((l) => l.id === id) : undefined;
+  const existing = params.id ? logs.find((l) => l.id === params.id) : undefined;
+  const fromTimer = !existing && !!params.start && !!params.end;
   const last = logs[0];
 
-  const [date, setDate] = useState<DateKey>(existing?.date ?? today);
-  const [bedtime, setBedtime] = useState(existing ? formatIsoTime(existing.bedtimeAt) : last ? formatIsoTime(last.bedtimeAt) : '23:00');
-  const [wakeTime, setWakeTime] = useState(existing ? formatIsoTime(existing.wakeAt) : last ? formatIsoTime(last.wakeAt) : '07:00');
+  const source: SleepSource = existing?.source ?? (fromTimer ? 'timer' : 'manual');
+  const initialBed = existing?.bedtimeAt ?? (fromTimer ? params.start! : null);
+  const initialWake = existing?.wakeAt ?? (fromTimer ? params.end! : null);
+
+  const [date, setDate] = useState<DateKey>(existing?.date ?? (initialWake ? sleepDateOf(initialWake) : today));
+  const [bedtime, setBedtime] = useState(initialBed ? formatIsoTime(initialBed) : last ? formatIsoTime(last.bedtimeAt) : '23:00');
+  const [wakeTime, setWakeTime] = useState(initialWake ? formatIsoTime(initialWake) : last ? formatIsoTime(last.wakeAt) : '07:00');
+  const [latency, setLatency] = useState(existing?.latencyMinutes ?? 0);
   const [quality, setQuality] = useState(existing?.quality ?? 3);
   const [notes, setNotes] = useState(existing?.notes ?? '');
   const [saving, setSaving] = useState(false);
 
-  const duration = useMemo(() => computeSleepWindow(date, bedtime, wakeTime).durationMinutes, [date, bedtime, wakeTime]);
+  // Mientras no se toquen las horas del temporizador se conservan los instantes exactos.
+  const untouched =
+    !!initialBed &&
+    !!initialWake &&
+    bedtime === formatIsoTime(initialBed) &&
+    wakeTime === formatIsoTime(initialWake) &&
+    date === sleepDateOf(initialWake);
+  const window = useMemo(
+    () => (untouched ? { bedtimeAt: initialBed!, wakeAt: initialWake! } : computeSleepWindow(date, bedtime, wakeTime)),
+    [untouched, initialBed, initialWake, date, bedtime, wakeTime],
+  );
+  const duration = sleepDuration(window.bedtimeAt, window.wakeAt, latency);
+  const problem = sleepProblem(window.bedtimeAt, window.wakeAt, latency);
   const dates = Array.from({ length: 14 }, (_, i) => shiftKey(today, -i));
   const replacing = !existing && logs.some((l) => l.date === date);
 
   const submit = async () => {
+    if (problem) return;
     setSaving(true);
     try {
-      await save({ date, bedtime, wakeTime, quality, notes: notes.trim() || null }, existing?.id);
+      await save(
+        { date, bedtimeAt: window.bedtimeAt, wakeAt: window.wakeAt, latencyMinutes: latency, quality, notes: notes.trim() || null, source },
+        existing?.id,
+      );
+      if (fromTimer) await sleepSession.clear();
       haptics.success();
-      goBack();
+      goBack('/sleep');
     } catch (e) {
       showError('No se pudo guardar', e);
       setSaving(false);
@@ -55,7 +85,7 @@ export default function SleepFormScreen() {
       haptics.warning();
       try {
         await remove(existing.id);
-        goBack();
+        goBack('/sleep');
       } catch (e) {
         showError('No se pudo eliminar', e);
       }
@@ -64,10 +94,15 @@ export default function SleepFormScreen() {
 
   return (
     <ModalScreen
-      title={existing ? 'Editar sueño' : 'Registrar sueño'}
+      title={existing ? 'Corregir sueño' : fromTimer ? 'Buenos días' : 'Registrar sueño'}
       footer={
         <View className="gap-2">
-          <Button title={existing ? 'Guardar cambios' : 'Guardar'} icon={Check} disabled={saving || duration <= 0} onPress={submit} />
+          {problem ? (
+            <Txt variant="caption" className="text-center text-danger dark:text-danger">
+              {problem}
+            </Txt>
+          ) : null}
+          <Button title={existing ? 'Guardar cambios' : 'Guardar'} icon={Check} disabled={saving || !!problem} onPress={submit} />
           {existing ? <Button title="Eliminar registro" icon={Trash} variant="ghost" onPress={onDelete} /> : null}
         </View>
       }
@@ -79,7 +114,20 @@ export default function SleepFormScreen() {
         <Txt variant="caption" className="mt-1">
           {duration >= goal ? 'Cumples tu meta de sueño' : `Te faltan ${formatDuration(goal - duration)} para tu meta`}
         </Txt>
+        <View className="mt-3 rounded-full bg-subtle px-3 py-1 dark:bg-subtle-dark">
+          <Txt variant="caption">{SOURCE_LABELS[source].label}</Txt>
+        </View>
       </Card>
+
+      {source === 'timer' ? (
+        <View className="mt-3 flex-row gap-2 rounded-2xl bg-sleep/10 px-3 py-3">
+          <Info size={16} color={t.sleep} />
+          <Txt variant="caption" className="flex-1 leading-5">
+            Registro estimado: el temporizador mide desde «Voy a dormir» hasta «Me desperté». No detecta si dormías. Ajusta las
+            horas o indica cuánto tardaste en dormirte.
+          </Txt>
+        </View>
+      ) : null}
 
       <FieldLabel>Noche que termina el</FieldLabel>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} className="-mx-5" contentContainerClassName="gap-2 px-5">
@@ -101,9 +149,7 @@ export default function SleepFormScreen() {
               <Text className={cx('text-[11px] font-semibold', isSel ? 'text-white/80' : 'text-muted dark:text-muted-dark')}>
                 {d === today ? 'Hoy' : WEEKDAY_SHORT[weekdayOf(d)]}
               </Text>
-              <Text className={cx('mt-0.5 text-[18px] font-bold', isSel ? 'text-white' : 'text-ink dark:text-ink-dark')}>
-                {formatEs(d, 'd')}
-              </Text>
+              <Text className={cx('mt-0.5 text-[18px] font-bold', isSel ? 'text-white' : 'text-ink dark:text-ink-dark')}>{formatEs(d, 'd')}</Text>
             </PressableScale>
           );
         })}
@@ -119,6 +165,20 @@ export default function SleepFormScreen() {
         <TimeField label="Me acosté" icon={BedDouble} value={bedtime} onChange={setBedtime} />
         <TimeField label="Me desperté" icon={AlarmClock} value={wakeTime} onChange={setWakeTime} />
       </View>
+      <Txt variant="caption" className="mt-2">
+        Si la hora de acostarte es posterior a la de despertar, se cuenta desde la noche anterior.
+      </Txt>
+
+      <FieldLabel hint="Se descuenta del total">Tardé en dormirme</FieldLabel>
+      <Card className="py-3">
+        <View className="flex-row items-center justify-between">
+          <View className="flex-row items-center gap-3">
+            <Hourglass size={18} color={t.sleep} />
+            <Txt variant="label">{latency === 0 ? 'Enseguida' : formatDuration(latency)}</Txt>
+          </View>
+          <Stepper value={latency} min={0} max={180} step={5} onChange={setLatency} format={(v) => `${v} min`} />
+        </View>
+      </Card>
 
       <FieldLabel hint={QUALITY_LABELS[quality]}>Calidad del sueño</FieldLabel>
       <View className="flex-row gap-2">

@@ -33,7 +33,21 @@ Expo SDK 58 · React Native 0.88 · TypeScript · Expo Router · NativeWind 4 (T
   - Editar, **pausar** (los días pausados no cuentan ni rompen rachas), archivar y eliminar con confirmación que indica cuántos días de historial se borrarán.
   - El progreso es independiente por fecha: los hábitos aparecen solos cada día que toca y el historial se conserva siempre.
 - **Hidratación** (`/water`, desde Inicio o Configuración): meta en litros o mililitros, botones de 150/250/500 ml, cantidad personalizada, anillo y barra de progreso, cantidad restante, registros del día (con borrado individual), historial de 14 días y recordatorios configurables (desde/hasta y cada cuánto). Un hábito de *Hidratación* medido en L o ml se alimenta automáticamente de este módulo.
-- **Calendario**, **Sueño**, **Estadísticas** y **Configuración**, como en la primera versión.
+- **Sueño**:
+  - *Registro manual*: hora de acostarse y de despertar (cruza la medianoche), minutos hasta dormirte, calidad (1–5) y notas; los registros anteriores se pueden corregir.
+  - *Temporizador*: «Voy a dormir» guarda la hora exacta y «Me desperté» abre el registro para revisarlo. La sesión sobrevive a cerrar la app. Estos registros se marcan como **Estimado**: un temporizador mide tiempo en cama y **no detecta si estás dormido**.
+  - Estadísticas: horas por noche, promedio semanal y mensual, meta configurable, gráfico real frente a objetivo, diferencia con la meta, deuda de sueño, horas medias e historial completo por meses. Recordatorio nocturno configurable desde la propia pantalla.
+  - Preparado para **Health Connect** (Android) y **HealthKit** (iOS) en `src/services/health/`: contrato, adaptadores e importador que pide permiso explícito, solo lee sesiones de sueño y no duplica ni pisa registros manuales. Activarlo requiere un *development build* (ver comentarios en `providers.ts`).
+- **Calendario**: mes actual con navegación, días completos (relleno), parciales (tono + porcentaje), sin cumplir (punto rojo) y en pausa (guion), día actual resaltado y resumen del mes. Al tocar una fecha muestra cada hábito con su estado («completado», «2.5 / 2.5 L», «no completado») y el progreso total; desde ahí se pueden corregir los registros. Filtro por hábito individual (incluidos los archivados).
+- **Estadísticas** (siempre desde registros reales): cumplimiento de hoy, de la semana y del mes; racha actual y mejor racha histórica de días completos; gráfico de líneas diario, barras semanales y calendario de actividad; hábitos con mayor y menor cumplimiento; horas totales de entrenamiento y de estudio; agua de hoy y promedio diario; promedio de sueño; rendimiento por día de la semana.
+- **Configuración**, como en la primera versión.
+
+### Cómo se evalúa cada día
+
+- Un hábito solo cuenta desde su **fecha de inicio**; los días anteriores no son incumplimientos.
+- Al **cambiar la frecuencia o la meta**, la regla anterior se guarda en `scheduleHistory` y sigue aplicándose a los días pasados.
+- Los días **en pausa** no cuentan. **Archivar** abre una pausa desde ese día, así el historial anterior sigue visible en el calendario y las estadísticas. Solo **eliminar** borra el hábito de todo.
+- Un día a medias de hoy no penaliza: cuenta cuando termina o cuando se completa.
 
 ### Notas sobre recordatorios
 

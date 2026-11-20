@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo, type ReactNode } from 'react';
 import { Text, View } from 'react-native';
 import { Calendar, type DateData } from 'react-native-calendars';
 import type { DateKey } from '@/domain/types';
@@ -22,12 +22,18 @@ function calendarTheme(t: ThemeColors) {
   };
 }
 
-type DayInfo = { ratio: number | null };
-
 /**
- * Calendario mensual con mapa de calor.
- * `getDay` devuelve el cumplimiento (0…1) o null si no había nada programado.
+ * Estado de un día:
+ * - ratio null → no tocaba nada (antes del inicio, día no programado…).
+ * - paused → el hábito estaba en pausa.
+ * - 0 / parcial / 1 → sin cumplir / parcial / completo.
  */
+export type DayInfo = { ratio: number | null; paused?: boolean };
+
+const CELL_W = 42;
+const CELL_H = 50;
+
+/** Calendario mensual con indicadores de cumplimiento. */
 export const HeatCalendar = memo(function HeatCalendar({
   today,
   selected,
@@ -36,6 +42,7 @@ export const HeatCalendar = memo(function HeatCalendar({
   color,
   firstDay,
   onMonthChange,
+  showPercent = true,
 }: {
   today: DateKey;
   selected?: DateKey;
@@ -44,22 +51,26 @@ export const HeatCalendar = memo(function HeatCalendar({
   color?: string;
   firstDay: 0 | 1;
   onMonthChange?: (month: DateKey) => void;
+  showPercent?: boolean;
 }) {
   const t = useTheme();
   const accent = color ?? t.brand;
-  const theme = useMemo(() => calendarTheme(t), [t.scheme]); // eslint-disable-line react-hooks/exhaustive-deps
+  const theme = useMemo(() => calendarTheme(t), [t]);
 
   const DayCell = useCallback(
     ({ date, state }: { date?: DateData; state?: string }) => {
-      if (!date) return <View style={{ width: 40, height: 44 }} />;
+      if (!date) return <View style={{ width: CELL_W, height: CELL_H }} />;
       const key = date.dateString;
       const future = key > today;
       const outside = state === 'disabled';
-      const { ratio } = getDay(key);
+      const { ratio, paused } = future ? { ratio: null } : getDay(key);
       const isSel = key === selected;
       const isToday = key === today;
       const full = ratio !== null && ratio >= 1;
-      const bg = ratio === null || ratio === 0 || future ? 'transparent' : full ? accent : withAlpha(accent, 0.18 + ratio * 0.45);
+      const partial = ratio !== null && ratio > 0 && ratio < 1;
+      const missed = ratio === 0;
+      const bg = full ? accent : partial ? withAlpha(accent, 0.15 + ratio * 0.35) : 'transparent';
+      const label = full ? 'completo' : partial ? `${Math.round(ratio * 100)} %` : missed ? 'sin cumplir' : paused ? 'en pausa' : 'sin hábitos';
 
       return (
         <PressableScale
@@ -69,12 +80,12 @@ export const HeatCalendar = memo(function HeatCalendar({
             haptics.selection();
             onSelect?.(key);
           }}
-          accessibilityLabel={key}
+          accessibilityLabel={`${key}: ${label}`}
           className="items-center"
-          style={{ width: 40, height: 44, opacity: outside ? 0.35 : 1 }}
+          style={{ width: CELL_W, height: CELL_H, opacity: outside ? 0.35 : 1 }}
         >
           <View
-            className={cx('h-9 w-9 items-center justify-center rounded-xl')}
+            className="h-9 w-9 items-center justify-center rounded-xl"
             style={{
               backgroundColor: bg,
               borderWidth: isSel ? 2 : isToday ? 1.5 : 0,
@@ -82,24 +93,32 @@ export const HeatCalendar = memo(function HeatCalendar({
             }}
           >
             <Text
-              style={{ color: full ? '#FFFFFF' : future ? t.muted : t.ink }}
+              style={{ color: full ? '#FFFFFF' : future || paused ? t.muted : t.ink }}
               className={cx('text-[14px]', isToday || isSel ? 'font-bold' : 'font-medium')}
             >
               {date.day}
             </Text>
           </View>
-          {ratio !== null && ratio === 0 && !future && !outside ? (
-            <View className="mt-0.5 h-1 w-1 rounded-full" style={{ backgroundColor: t.line }} />
+          {/* Indicador discreto bajo el número */}
+          {!outside && partial && showPercent ? (
+            <Text style={{ color: t.muted }} className="mt-0.5 text-[9px] font-semibold">
+              {Math.round(ratio * 100)}
+            </Text>
+          ) : !outside && missed ? (
+            <View className="mt-1 h-1 w-1 rounded-full" style={{ backgroundColor: t.danger, opacity: 0.7 }} />
+          ) : !outside && paused ? (
+            <View className="mt-1 h-0.5 w-2.5 rounded-full" style={{ backgroundColor: t.muted }} />
           ) : null}
         </PressableScale>
       );
     },
-    [today, selected, getDay, accent, onSelect, t],
+    [today, selected, getDay, accent, onSelect, t, showPercent],
   );
 
   return (
     <Calendar
-      key={t.scheme}
+      // Se remonta al cambiar de tema o de mes seleccionado (p. ej. al pulsar «Hoy»).
+      key={`${t.scheme}-${(selected ?? today).slice(0, 7)}`}
       current={selected ?? today}
       firstDay={firstDay}
       enableSwipeMonths
@@ -112,16 +131,21 @@ export const HeatCalendar = memo(function HeatCalendar({
   );
 });
 
-export function HeatLegend({ color }: { color?: string }) {
+export function HeatLegend({ color, showPaused = false }: { color?: string; showPaused?: boolean }) {
   const t = useTheme();
   const accent = color ?? t.brand;
+  const item = (swatch: ReactNode, label: string) => (
+    <View className="flex-row items-center gap-1.5">
+      {swatch}
+      <Text className="text-[11px] text-muted dark:text-muted-dark">{label}</Text>
+    </View>
+  );
   return (
-    <View className="mt-2 flex-row items-center justify-center gap-1.5">
-      <Text className="mr-1 text-[11px] text-muted dark:text-muted-dark">Menos</Text>
-      {[0.18, 0.4, 0.63, 1].map((a, i) => (
-        <View key={i} className="h-3.5 w-3.5 rounded" style={{ backgroundColor: a === 1 ? accent : withAlpha(accent, a) }} />
-      ))}
-      <Text className="ml-1 text-[11px] text-muted dark:text-muted-dark">Más</Text>
+    <View className="mt-2 flex-row flex-wrap items-center justify-center gap-x-4 gap-y-1.5">
+      {item(<View className="h-3.5 w-3.5 rounded" style={{ backgroundColor: accent }} />, 'Completo')}
+      {item(<View className="h-3.5 w-3.5 rounded" style={{ backgroundColor: withAlpha(accent, 0.35) }} />, 'Parcial (%)')}
+      {item(<View className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: t.danger }} />, 'Sin cumplir')}
+      {showPaused ? item(<View className="h-0.5 w-3 rounded-full" style={{ backgroundColor: t.muted }} />, 'En pausa') : null}
     </View>
   );
 }

@@ -40,10 +40,25 @@ export type TrackingType = 'check' | 'quantity' | 'duration' | 'count';
 /** daily = todos los días · weekly = días concretos · interval = cada N días. */
 export type HabitFrequency = 'daily' | 'weekly' | 'interval';
 
+/**
+ * Regla de programación y meta que estuvo vigente hasta `until` (inclusive).
+ * Al editar la frecuencia o la meta se guarda la regla anterior, para que los
+ * días pasados se sigan evaluando con lo que estaba programado entonces.
+ */
+export interface HabitRule {
+  until: DateKey;
+  frequency: HabitFrequency;
+  daysOfWeek: Weekday[];
+  intervalDays: number;
+  target: number;
+}
+
 /** Periodo en pausa; `to` null mientras siga pausado. Los días pausados no cuentan. */
 export interface PausePeriod {
   from: DateKey;
   to: DateKey | null;
+  /** 'archive' si la pausa la abrió el archivado (al restaurar se cierra). */
+  reason?: 'archive';
 }
 
 export interface Habit extends SyncMeta {
@@ -69,6 +84,8 @@ export interface Habit extends SyncMeta {
   /** Ids de notificaciones programadas en este dispositivo. No se sincronizan. */
   notificationIds: string[];
   pauses: PausePeriod[];
+  /** Reglas anteriores, ordenadas por `until` ascendente. La actual son los campos de arriba. */
+  scheduleHistory: HabitRule[];
   archived: boolean;
   sortOrder: number;
 }
@@ -88,16 +105,31 @@ export interface WaterLog extends SyncMeta {
   amountMl: number;
 }
 
+/**
+ * Origen de un registro de sueño:
+ * - manual: horas introducidas por la persona.
+ * - timer: "Voy a dormir" / "Me desperté". Mide tiempo en cama, es una ESTIMACIÓN:
+ *   un temporizador no puede saber si estás dormido.
+ * - health_connect / healthkit: importado (futuro) de Android / iOS con permiso explícito.
+ */
+export type SleepSource = 'manual' | 'timer' | 'health_connect' | 'healthkit';
+
 export interface SleepLog extends SyncMeta {
   id: string;
   /** Día en el que te despertaste; identifica la noche. */
   date: DateKey;
   bedtimeAt: ISODateTime;
   wakeAt: ISODateTime;
+  /** Minutos que tardaste en dormirte; se descuentan de la duración. */
+  latencyMinutes: number;
+  /** Tiempo dormido = (despertar − acostarse) − latencia. */
   durationMinutes: number;
   /** 1 (muy mala) … 5 (excelente) */
   quality: number;
   notes: string | null;
+  source: SleepSource;
+  /** Id del registro en Health Connect / HealthKit, para no duplicar al importar. */
+  externalId: string | null;
 }
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -131,6 +163,8 @@ export interface AppSettings {
   waterReminderEveryMinutes: number;
   waterNotificationIds: string[];
   activeTimer: ActiveTimer | null;
+  /** Sesión de sueño en curso ("Voy a dormir"); sobrevive a cerrar la app. */
+  sleepSession: { startedAt: ISODateTime } | null;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -151,6 +185,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   waterReminderEveryMinutes: 120,
   waterNotificationIds: [],
   activeTimer: null,
+  sleepSession: null,
 };
 
 /** Índice en memoria de progreso: fecha → hábito → valor. */
@@ -177,9 +212,13 @@ export type HabitInput = Pick<
 >;
 
 export type SleepInput = {
+  /** Día en que te despertaste. */
   date: DateKey;
-  bedtime: TimeOfDay;
-  wakeTime: TimeOfDay;
+  bedtimeAt: ISODateTime;
+  wakeAt: ISODateTime;
+  latencyMinutes: number;
   quality: number;
   notes: string | null;
+  source: SleepSource;
+  externalId?: string | null;
 };

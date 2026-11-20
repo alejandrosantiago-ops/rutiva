@@ -124,4 +124,20 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_water_logs_date ON water_logs(date);
   `,
+
+  // v3 — historial de programación, archivado como pausa (para no perder
+  // días pasados) y origen/latencia de los registros de sueño.
+  `
+  ALTER TABLE habits ADD COLUMN schedule_history TEXT NOT NULL DEFAULT '[]';
+
+  UPDATE habits
+  SET pauses = json_insert(pauses, '$[#]', json_object('from', substr(updated_at, 1, 10), 'to', NULL, 'reason', 'archive'))
+  WHERE archived = 1
+    AND NOT EXISTS (SELECT 1 FROM json_each(habits.pauses) WHERE json_extract(value, '$.to') IS NULL);
+
+  ALTER TABLE sleep_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+  ALTER TABLE sleep_logs ADD COLUMN latency_minutes INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sleep_logs ADD COLUMN external_id TEXT;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_sleep_logs_external ON sleep_logs(external_id) WHERE external_id IS NOT NULL;
+  `,
 ];

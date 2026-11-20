@@ -42,6 +42,7 @@ function habit(over: Partial<Habit> = {}): Habit {
     reminderTimes: [],
     notificationIds: [],
     pauses: [],
+    scheduleHistory: [],
     archived: false,
     sortOrder: 0,
     ...over,
@@ -146,7 +147,7 @@ test('textos de progreso por tipo', () => {
 test('no cuenta días anteriores al inicio ni hábitos archivados', () => {
   const h = habit({ startDate: '2026-11-19' });
   assert.equal(isScheduledOn(h, '2026-11-18'), false);
-  assert.equal(dayProgress([habit({ archived: true })], {}, TODAY).scheduled, 0);
+  assert.equal(dayProgress([habit({ archived: true, pauses: [{ from: '2026-11-01', to: null, reason: 'archive' }] })], {}, TODAY).scheduled, 0);
 });
 
 test('estadísticas por hábito: hoy pendiente no penaliza', () => {
@@ -218,6 +219,9 @@ test('resumen de sueño promedia bien alrededor de medianoche', () => {
     date,
     quality: 4,
     notes: null,
+    latencyMinutes: 0,
+    source: 'manual',
+    externalId: null,
     ...computeSleepWindow(date, bed, wake),
   });
   const logs = [mk('2026-11-19', '23:30', '07:30'), mk('2026-11-20', '00:30', '07:30')];

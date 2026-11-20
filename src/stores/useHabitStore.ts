@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { repositories } from '@/repositories';
 import type { HabitPatch } from '@/repositories';
 import { shiftKey, todayKey } from '@/domain/dates';
-import { getValue, isPaused } from '@/domain/habits';
+import { getValue, isPaused, nextScheduleHistory, targetOn } from '@/domain/habits';
 import { isWaterHabit, mlToUnit, unitToMl, waterTotals } from '@/domain/water';
 import type { DateKey, Habit, HabitInput, LogIndex } from '@/domain/types';
 import { cancelNotifications, scheduleHabitReminders } from '@/services/notifications';
@@ -85,12 +85,28 @@ export const useHabitStore = create<HabitState>((set, get) => {
     },
 
     async updateHabit(id, input) {
-      await patch(id, input);
+      const habit = get().habits.find((h) => h.id === id);
+      if (!habit) throw new Error('Hábito no encontrado');
+      // Si cambia la frecuencia o la meta, la regla anterior sigue valiendo para el pasado.
+      const scheduleHistory = nextScheduleHistory(habit, input, todayKey());
+      await patch(id, { ...input, scheduleHistory });
       return get().habits.find((h) => h.id === id)!;
     },
 
     async setArchived(id, archived) {
-      await patch(id, { archived });
+      const habit = get().habits.find((h) => h.id === id);
+      if (!habit || habit.archived === archived) return;
+      const today = todayKey();
+      let pauses = [...habit.pauses];
+      const last = pauses[pauses.length - 1];
+      if (archived) {
+        // Archivar = pausa desde hoy: el historial anterior sigue en calendario y estadísticas.
+        if (!isPaused(habit)) pauses.push({ from: today, to: null, reason: 'archive' });
+      } else if (last && last.to === null && last.reason === 'archive') {
+        if (last.from >= today) pauses = pauses.slice(0, -1);
+        else pauses[pauses.length - 1] = { ...last, to: shiftKey(today, -1) };
+      }
+      await patch(id, { archived, pauses });
     },
 
     async setPaused(id, paused) {
@@ -152,7 +168,9 @@ export const useHabitStore = create<HabitState>((set, get) => {
       const habit = get().habits.find((h) => h.id === habitId);
       if (!habit) return 0;
       const current = currentValue(habit, get().logs, date);
-      const next = current >= habit.target ? 0 : habit.trackingType === 'count' ? current + 1 : habit.target;
+      // La meta puede haber cambiado: se usa la vigente en esa fecha.
+      const target = targetOn(habit, date);
+      const next = current >= target ? 0 : habit.trackingType === 'count' ? current + 1 : target;
       await get().setValue(habitId, date, next);
       return next;
     },

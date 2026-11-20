@@ -26,14 +26,13 @@ import { useHabitStore } from '@/stores/useHabitStore';
 import { useSleepStore } from '@/stores/useSleepStore';
 import { useWaterStore } from '@/stores/useWaterStore';
 import { syncWaterReminders } from '@/stores/waterReminders';
+import { syncBedtimeReminder } from '@/stores/bedtimeReminder';
 import { router } from 'expo-router';
 import { formatWater } from '@/domain/water';
 import {
   cancelAllNotifications,
-  cancelNotifications,
   getPermissionStatus,
   notificationsSupported,
-  scheduleBedtimeReminder,
   sendTestNotification,
 } from '@/services/notifications';
 import { useTheme } from '@/theme/colors';
@@ -53,23 +52,16 @@ export default function SettingsScreen() {
     getPermissionStatus().then(setPermission);
   }, [settings.notificationsEnabled]);
 
-  const syncBedtime = async (enabled: boolean, time: string, globalOn = settings.notificationsEnabled) => {
-    const previous = useSettingsStore.getState().settings.bedtimeNotificationId;
-    if (enabled && globalOn) {
-      const id = await scheduleBedtimeReminder(time, previous);
-      await update('bedtimeNotificationId', id);
-      if (!id) showAlert('Permiso necesario', 'Activa las notificaciones de Rutiva en los ajustes del sistema.');
-    } else {
-      if (previous) await cancelNotifications([previous]);
-      await update('bedtimeNotificationId', null);
-    }
+  // Los ajustes ya se guardaron antes de llamar; el helper lee el estado actual.
+  const syncBedtime = async (..._args: unknown[]) => {
+    if (!(await syncBedtimeReminder())) showAlert('Permiso necesario', 'Activa las notificaciones de Rutiva en los ajustes del sistema.');
   };
 
   const toggleNotifications = async (on: boolean) => {
     await update('notificationsEnabled', on);
     if (!on) await cancelAllNotifications();
     await useHabitStore.getState().rescheduleAll();
-    await syncBedtime(settings.bedtimeReminderEnabled, settings.bedtimeReminderTime, on);
+    await syncBedtime();
     await syncWaterReminders();
     setPermission(await getPermissionStatus());
   };
