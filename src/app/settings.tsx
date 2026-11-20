@@ -10,6 +10,7 @@ import {
   CalendarDays,
   ChevronLeft,
   Download,
+  Droplets,
   Info,
   Moon,
   Palette,
@@ -23,6 +24,10 @@ import { repositories } from '@/repositories';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useHabitStore } from '@/stores/useHabitStore';
 import { useSleepStore } from '@/stores/useSleepStore';
+import { useWaterStore } from '@/stores/useWaterStore';
+import { syncWaterReminders } from '@/stores/waterReminders';
+import { router } from 'expo-router';
+import { formatWater } from '@/domain/water';
 import {
   cancelAllNotifications,
   cancelNotifications,
@@ -65,6 +70,7 @@ export default function SettingsScreen() {
     if (!on) await cancelAllNotifications();
     await useHabitStore.getState().rescheduleAll();
     await syncBedtime(settings.bedtimeReminderEnabled, settings.bedtimeReminderTime, on);
+    await syncWaterReminders();
     setPermission(await getPermissionStatus());
   };
 
@@ -94,7 +100,7 @@ export default function SettingsScreen() {
         await cancelAllNotifications();
         await repositories.resetAll();
         useSettingsStore.getState().reset();
-        await Promise.all([useSettingsStore.getState().load(), useHabitStore.getState().load(), useSleepStore.getState().load()]);
+        await Promise.all([useSettingsStore.getState().load(), useHabitStore.getState().load(), useSleepStore.getState().load(), useWaterStore.getState().load()]);
         setName('');
         goBack();
       } catch (e) {
@@ -204,6 +210,18 @@ export default function SettingsScreen() {
             />
           </View>
         ) : null}
+
+        <FieldLabel>Hidratación</FieldLabel>
+        <Card className="py-1">
+          <ListRow
+            icon={Droplets}
+            iconColor="#06B6D4"
+            title="Agua"
+            subtitle={`Meta ${formatWater(settings.waterGoalMl, settings.waterUnit)} · recordatorios ${settings.waterReminderEnabled ? "activados" : "desactivados"}`}
+            last
+            onPress={() => router.push("/water")}
+          />
+        </Card>
 
         <FieldLabel>Sueño</FieldLabel>
         <Card>

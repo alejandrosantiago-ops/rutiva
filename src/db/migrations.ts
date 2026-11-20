@@ -63,4 +63,65 @@ export const MIGRATIONS: string[] = [
     value TEXT NOT NULL
   );
   `,
+
+  // v2 — categorías, tipos de seguimiento, intervalos, fin, pausas, varios
+  // recordatorios e hidratación. SQLite no permite cambiar un CHECK, así que
+  // se reconstruye `habits` copiando los datos (las claves foráneas se
+  // desactivan fuera de la transacción en client.ts para no borrar registros).
+  `
+  CREATE TABLE habits_v2 (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    category TEXT NOT NULL DEFAULT 'custom',
+    icon TEXT NOT NULL,
+    color TEXT NOT NULL,
+    tracking_type TEXT NOT NULL DEFAULT 'check' CHECK (tracking_type IN ('check', 'quantity', 'duration', 'count')),
+    target REAL NOT NULL DEFAULT 1 CHECK (target > 0),
+    unit TEXT,
+    frequency TEXT NOT NULL DEFAULT 'daily' CHECK (frequency IN ('daily', 'weekly', 'interval')),
+    days_of_week TEXT NOT NULL,
+    interval_days INTEGER NOT NULL DEFAULT 1 CHECK (interval_days >= 1),
+    start_date TEXT NOT NULL,
+    end_date TEXT,
+    suggested_time TEXT,
+    reminder_times TEXT NOT NULL DEFAULT '[]',
+    notification_ids TEXT NOT NULL DEFAULT '[]',
+    pauses TEXT NOT NULL DEFAULT '[]',
+    archived INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+
+  INSERT INTO habits_v2 (id, name, description, category, icon, color, tracking_type, target, unit, frequency,
+    days_of_week, interval_days, start_date, end_date, suggested_time, reminder_times, notification_ids, pauses,
+    archived, sort_order, created_at, updated_at, deleted_at)
+  SELECT id, name, description,
+    CASE icon WHEN 'water' THEN 'hydration' WHEN 'workout' THEN 'exercise' WHEN 'walk' THEN 'exercise'
+      WHEN 'book' THEN 'study' WHEN 'meditate' THEN 'wellbeing' ELSE 'custom' END,
+    icon, color,
+    CASE WHEN target_per_day > 1 THEN 'count' ELSE 'check' END,
+    target_per_day,
+    CASE WHEN target_per_day > 1 THEN unit ELSE NULL END,
+    CASE frequency WHEN 'custom' THEN 'weekly' ELSE 'daily' END,
+    days_of_week, 1, start_date, NULL, NULL,
+    CASE WHEN reminder_enabled = 1 AND reminder_time IS NOT NULL THEN json_array(reminder_time) ELSE '[]' END,
+    notification_ids, '[]', archived, sort_order, created_at, updated_at, deleted_at
+  FROM habits;
+
+  DROP TABLE habits;
+  ALTER TABLE habits_v2 RENAME TO habits;
+
+  CREATE TABLE IF NOT EXISTS water_logs (
+    id TEXT PRIMARY KEY NOT NULL,
+    date TEXT NOT NULL,
+    amount_ml INTEGER NOT NULL CHECK (amount_ml > 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_water_logs_date ON water_logs(date);
+  `,
 ];

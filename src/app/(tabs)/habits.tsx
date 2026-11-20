@@ -3,7 +3,8 @@ import { View } from 'react-native';
 import { router } from 'expo-router';
 import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { Archive, ListChecks, Plus } from 'lucide-react-native';
-import { currentStreak, getCount } from '@/domain/habits';
+import { currentStreak, getValue } from '@/domain/habits';
+import { useLogIndex } from '@/hooks/useLogIndex';
 import { useHabitStore } from '@/stores/useHabitStore';
 import { useToday } from '@/hooks/useToday';
 import { Screen } from '@/components/ui/layout';
@@ -16,7 +17,7 @@ type Filter = 'active' | 'archived';
 export default function HabitsScreen() {
   const today = useToday();
   const habits = useHabitStore((s) => s.habits);
-  const logs = useHabitStore((s) => s.logs);
+  const logs = useLogIndex();
   const [filter, setFilter] = useState<Filter>('active');
 
   const list = useMemo(() => habits.filter((h) => (filter === 'active' ? !h.archived : h.archived)), [habits, filter]);
@@ -48,13 +49,13 @@ export default function HabitsScreen() {
             action={<Button title="Crear mi primer hábito" icon={Plus} onPress={() => router.push('/habit/new')} />}
           />
         ) : (
-          <EmptyState icon={Archive} title="Nada archivado" description="Los hábitos que pauses aparecerán aquí sin perder su historial." />
+          <EmptyState icon={Archive} title="Nada archivado" description="Los hábitos que archives aparecerán aquí sin perder su historial." />
         )
       ) : (
         <>
           {list.map((h, i) => (
             <Animated.View key={h.id} entering={FadeInDown.delay(i * 40).springify().damping(18)} layout={LinearTransition}>
-              <HabitCard habit={h} count={getCount(logs, h.id, today)} streak={currentStreak(h, logs, today)} showFrequency />
+              <HabitCard habit={h} date={today} value={getValue(logs, h.id, today)} streak={currentStreak(h, logs, today)} showFrequency />
             </Animated.View>
           ))}
           <Txt variant="caption" className="mt-2 text-center">

@@ -2,7 +2,8 @@ import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { Lock } from 'lucide-react-native';
 import { formatEs } from '@/domain/dates';
-import { dayProgress, getCount, isActive, isScheduledOn } from '@/domain/habits';
+import { dayProgress, getValue, isActive, isScheduledOn, progressRatio } from '@/domain/habits';
+import { useLogIndex } from '@/hooks/useLogIndex';
 import { useHabitStore } from '@/stores/useHabitStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useSelectedDay, useToday } from '@/hooks/useToday';
@@ -19,7 +20,7 @@ export default function CalendarScreen() {
   const t = useTheme();
   const today = useToday();
   const habits = useHabitStore((s) => s.habits);
-  const logs = useHabitStore((s) => s.logs);
+  const logs = useLogIndex();
   const weekStartsOn = useSettingsStore((s) => s.settings.weekStartsOn);
   const [selected, setSelected] = useSelectedDay(today);
   const [filter, setFilter] = useState<string | null>(null);
@@ -31,7 +32,7 @@ export default function CalendarScreen() {
     (d: string) => {
       if (focus) {
         if (!isScheduledOn(focus, d)) return { ratio: null };
-        return { ratio: Math.min(1, getCount(logs, focus.id, d) / focus.targetPerDay) };
+        return { ratio: progressRatio(focus, getValue(logs, focus.id, d)) };
       }
       const p = dayProgress(habits, logs, d);
       return { ratio: p.scheduled ? p.ratio : null };

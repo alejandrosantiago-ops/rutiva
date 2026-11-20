@@ -4,24 +4,27 @@ import { router } from 'expo-router';
 import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { CalendarCheck, Plus } from 'lucide-react-native';
 import type { DateKey } from '@/domain/types';
-import { currentStreak, getCount, habitsForDay } from '@/domain/habits';
+import { currentStreak, getValue, habitsForDay, isDoneOn } from '@/domain/habits';
 import { useHabitStore } from '@/stores/useHabitStore';
+import { useSettingsStore } from '@/stores/useSettingsStore';
+import { useLogIndex } from '@/hooks/useLogIndex';
+import { showError } from '@/lib/dialogs';
 import { Button, EmptyState, Txt } from '@/components/ui/primitives';
 import { HabitCard } from './HabitCard';
 
 /** Hábitos programados para un día, con los pendientes primero. */
 export function DayHabitList({ date, today, emptyCta = true }: { date: DateKey; today: DateKey; emptyCta?: boolean }) {
   const habits = useHabitStore((s) => s.habits);
-  const logs = useHabitStore((s) => s.logs);
-  const toggle = useHabitStore((s) => s.toggle);
+  const quickAction = useHabitStore((s) => s.quickAction);
+  const activeTimer = useSettingsStore((s) => s.settings.activeTimer);
+  const logs = useLogIndex();
   const hasAnyHabit = habits.some((h) => !h.archived);
 
   const { pending, done } = useMemo(() => {
     const due = habitsForDay(habits, date);
-    const isDone = (id: string, target: number) => getCount(logs, id, date) >= target;
     return {
-      pending: due.filter((h) => !isDone(h.id, h.targetPerDay)),
-      done: due.filter((h) => isDone(h.id, h.targetPerDay)),
+      pending: due.filter((h) => !isDoneOn(h, logs, date)),
+      done: due.filter((h) => isDoneOn(h, logs, date)),
     };
   }, [habits, logs, date]);
 
@@ -31,14 +34,10 @@ export function DayHabitList({ date, today, emptyCta = true }: { date: DateKey; 
         icon={CalendarCheck}
         title={hasAnyHabit ? 'Día libre' : 'Empieza tu primera rutina'}
         description={
-          hasAnyHabit
-            ? 'No hay hábitos programados para este día.'
-            : 'Crea un hábito y márcalo cada día para construir tu racha.'
+          hasAnyHabit ? 'No hay hábitos programados para este día.' : 'Crea un hábito y regístralo cada día para construir tu racha.'
         }
         action={
-          emptyCta && !hasAnyHabit ? (
-            <Button title="Crear hábito" icon={Plus} onPress={() => router.push('/habit/new')} />
-          ) : undefined
+          emptyCta && !hasAnyHabit ? <Button title="Crear hábito" icon={Plus} onPress={() => router.push('/habit/new')} /> : undefined
         }
       />
     );
@@ -49,9 +48,11 @@ export function DayHabitList({ date, today, emptyCta = true }: { date: DateKey; 
       <Animated.View key={h.id} entering={FadeInDown.delay(i * 45).springify().damping(18)} layout={LinearTransition.springify().damping(20)}>
         <HabitCard
           habit={h}
-          count={getCount(logs, h.id, date)}
+          date={date}
+          value={getValue(logs, h.id, date)}
           streak={date === today ? currentStreak(h, logs, today) : 0}
-          onToggle={() => toggle(h.id, date)}
+          timerRunning={activeTimer?.habitId === h.id && activeTimer.date === date}
+          onQuick={() => quickAction(h.id, date).catch((e) => showError('No se pudo guardar', e))}
         />
       </Animated.View>
     ));

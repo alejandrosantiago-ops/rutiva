@@ -25,13 +25,21 @@ Expo SDK 58 · React Native 0.88 · TypeScript · Expo Router · NativeWind 4 (T
 
 ## Funcionalidades
 
-- **Inicio**: saludo, progreso del día en un anillo animado, tira semanal con el cumplimiento de cada día (al tocar un día puedes registrar días pasados), lista de hábitos pendientes y completados, y resumen del sueño.
-- **Hábitos**: crear, editar, archivar y eliminar. Icono, color, frecuencia (diaria o días concretos), meta diaria con unidad (p. ej. 8 vasos) y recordatorio con hora.
-- **Detalle de hábito**: racha actual y mejor racha, cumplimiento en los últimos 30 días, total, y un mapa de calor mensual donde puedes marcar días pasados.
-- **Calendario**: mapa de calor mensual de todos los hábitos o de uno solo, y edición del día seleccionado.
-- **Sueño**: registro de la hora de acostarse y de despertar (se calcula bien aunque la noche cruce la medianoche), calidad del 1 al 5 y notas. Gráfico de 7 o 30 días con la línea de tu meta, promedio, porcentaje de meta cumplida, hora media de acostarse y levantarse, y constancia.
-- **Estadísticas**: cumplimiento, días perfectos, rachas, gráfico diario o semanal (7/30/90 días), rendimiento por día de la semana y ranking de hábitos.
-- **Configuración** (icono de engranaje en Inicio): nombre, tema sistema/claro/oscuro, recordatorios activados o no, recordatorio para dormir, meta de sueño, inicio de semana, vibración, exportar copia en JSON y restablecer datos.
+- **Inicio**: saludo según la hora, fecha, porcentaje y anillo de progreso diario, racha de días cumpliendo todos los objetivos, **próximo hábito** (según su hora sugerida o recordatorio), resúmenes de **agua** (con botón rápido de +250 ml), **actividad física** (minutos de los hábitos de ejercicio) y **sueño**, tira semanal y lista de hábitos pendientes y completados con su control de progreso. Todo se actualiza al instante.
+- **Hábitos** ilimitados con:
+  - Información básica: nombre, descripción, **categoría** (Salud, Ejercicio, Hidratación, Estudio, Trabajo, Alimentación, Sueño, Productividad, Bienestar, Personalizado), icono, color y fecha de inicio.
+  - **Cuatro tipos de seguimiento**: simple (casilla), **cantidad** con unidad y decimales (p. ej. 2.5 L, muestra lo que falta y permite sumar poco a poco), **duración** (meta en minutos u horas, **cronómetro** con iniciar/pausar/finalizar que sigue contando aunque cierres la app, y registro manual) y **frecuencia** (veces al día).
+  - **Programación**: todos los días, días concretos o cada N días; fecha de inicio, fecha de fin opcional, hora sugerida y **hasta 5 recordatorios**.
+  - Editar, **pausar** (los días pausados no cuentan ni rompen rachas), archivar y eliminar con confirmación que indica cuántos días de historial se borrarán.
+  - El progreso es independiente por fecha: los hábitos aparecen solos cada día que toca y el historial se conserva siempre.
+- **Hidratación** (`/water`, desde Inicio o Configuración): meta en litros o mililitros, botones de 150/250/500 ml, cantidad personalizada, anillo y barra de progreso, cantidad restante, registros del día (con borrado individual), historial de 14 días y recordatorios configurables (desde/hasta y cada cuánto). Un hábito de *Hidratación* medido en L o ml se alimenta automáticamente de este módulo.
+- **Calendario**, **Sueño**, **Estadísticas** y **Configuración**, como en la primera versión.
+
+### Notas sobre recordatorios
+
+- Los hábitos diarios o de días concretos sin fecha de fin usan avisos repetitivos del sistema.
+- Los de intervalo o con fecha de fin programan avisos para los próximos 14 días y se renuevan cada vez que abres la app.
+- iOS permite como máximo 64 notificaciones pendientes por app; con muchos hábitos y recordatorios conviene no pasar de ese número.
 
 ## Arquitectura
 
@@ -49,8 +57,8 @@ src/
   services/            Notificaciones locales
   components/          UI reutilizable (ui/, habits/, calendar/, sleep/, stats/)
   theme/               Paleta (compartida con Tailwind) y colores para props JS
-  hooks/ lib/          Utilidades (fecha actual, hápticos, diálogos, navegación)
-tests/                 Tests de dominio (node --test)
+  hooks/ lib/          Utilidades (fecha actual, progreso efectivo, hápticos, diálogos, navegación)
+tests/                 Tests de dominio y de migraciones sobre SQLite real (node --test)
 ```
 
 El flujo es: **pantallas → stores (Zustand) → repositorios (interfaces) → SQLite**. Las pantallas nunca usan SQL directamente.

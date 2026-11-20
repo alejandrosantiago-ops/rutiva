@@ -1,22 +1,80 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
-import { confirmAction } from '@/lib/dialogs';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
-import { goBack } from '@/lib/navigation';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { Archive, ArchiveArrowUp, Bell, ChevronLeft, Flame, Pencil, Percent, Trash, Trophy, CircleCheck } from 'lucide-react-native';
+import {
+  Archive,
+  ArchiveArrowUp,
+  Bell,
+  CalendarRange,
+  ChevronLeft,
+  CircleCheck,
+  Clock,
+  Flame,
+  Pause,
+  Pencil,
+  Percent,
+  Play,
+  Plus,
+  Sigma,
+  Trash,
+  Trophy,
+} from 'lucide-react-native';
 import { formatEs, shiftKey } from '@/domain/dates';
-import { bestStreak, currentStreak, describeFrequency, getCount, habitStats, isScheduledOn } from '@/domain/habits';
+import {
+  bestStreak,
+  currentStreak,
+  describeFrequency,
+  describeProgress,
+  describeTarget,
+  formatMinutes,
+  formatNumber,
+  getValue,
+  habitStats,
+  isPaused,
+  isScheduledOn,
+  progressRatio,
+} from '@/domain/habits';
+import { CATEGORIES } from '@/domain/categories';
+import type { Habit } from '@/domain/types';
 import { useHabitStore } from '@/stores/useHabitStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
+import { useLogIndex } from '@/hooks/useLogIndex';
 import { useToday } from '@/hooks/useToday';
 import { useTheme } from '@/theme/colors';
 import { haptics } from '@/lib/haptics';
+import { confirmAction, showError } from '@/lib/dialogs';
+import { goBack } from '@/lib/navigation';
 import { Button, Card, IconBadge, IconButton, SectionHeader, StatTile, Txt } from '@/components/ui/primitives';
 import { HeatCalendar, HeatLegend } from '@/components/calendar/HeatCalendar';
 import { habitIcon } from '@/components/habits/habitIcons';
+import { logRoute } from '@/components/habits/HabitCard';
 
+function Pill({ children, icon: Icon, tone }: { children: string; icon?: typeof Bell; tone?: 'warning' }) {
+  const t = useTheme();
+  return (
+    <View className={`flex-row items-center gap-1 rounded-full px-3 py-1 ${tone ? 'bg-warning/15' : 'bg-subtle dark:bg-subtle-dark'}`}>
+      {Icon ? <Icon size={12} color={tone ? t.warning : t.muted} /> : null}
+      <Txt variant="caption" className={tone ? 'text-warning dark:text-warning' : undefined}>
+        {children}
+      </Txt>
+    </View>
+  );
+}
+
+function totalLabel(habit: Habit, total: number, completedDays: number) {
+  switch (habit.trackingType) {
+    case 'check':
+      return { value: `${completedDays}`, hint: completedDays === 1 ? 'día completado' : 'días completados' };
+    case 'duration':
+      return { value: formatMinutes(total), hint: 'tiempo acumulado' };
+    case 'count':
+      return { value: `${total}`, hint: total === 1 ? 'vez en total' : 'veces en total' };
+    case 'quantity':
+      return { value: `${formatNumber(total)} ${habit.unit ?? ''}`, hint: 'acumulado' };
+  }
+}
 
 export default function HabitDetailScreen() {
   const t = useTheme();
@@ -27,26 +85,28 @@ export default function HabitDetailScreen() {
   const [snapshot, setSnapshot] = useState(live);
   if (live && live !== snapshot) setSnapshot(live);
   const habit = live ?? snapshot;
-  const logs = useHabitStore((s) => s.logs);
-  const { setCount, toggle, setArchived, deleteHabit } = useHabitStore.getState();
+  const logs = useLogIndex();
+  const { setValue, quickAction, setArchived, setPaused, deleteHabit } = useHabitStore.getState();
   const weekStartsOn = useSettingsStore((s) => s.settings.weekStartsOn);
 
   const stats = useMemo(() => {
     if (!habit) return null;
+    const all = habitStats(habit, logs, habit.startDate, today, today);
     return {
       streak: currentStreak(habit, logs, today),
       best: bestStreak(habit, logs, today),
       month: habitStats(habit, logs, shiftKey(today, -29), today, today),
-      all: habitStats(habit, logs, habit.startDate, today, today),
+      all,
+      daysWithData: Object.values(logs).filter((day) => (day[habit.id] ?? 0) > 0).length,
     };
   }, [habit, logs, today]);
 
   const getDay = useCallback(
     (d: string) => {
       if (!habit) return { ratio: null };
-      const count = getCount(logs, habit.id, d);
-      if (!isScheduledOn(habit, d)) return { ratio: count > 0 ? Math.min(1, count / habit.targetPerDay) : null };
-      return { ratio: Math.min(1, count / habit.targetPerDay) };
+      const v = getValue(logs, habit.id, d);
+      if (!isScheduledOn(habit, d)) return { ratio: v > 0 ? progressRatio(habit, v) : null };
+      return { ratio: progressRatio(habit, v) };
     },
     [habit, logs],
   );
@@ -54,22 +114,29 @@ export default function HabitDetailScreen() {
   if (!habit || !stats) return <Redirect href="/habits" />;
 
   const Icon = habitIcon(habit.icon);
-  const countToday = getCount(logs, habit.id, today);
-  const doneToday = countToday >= habit.targetPerDay;
+  const valueToday = getValue(logs, habit.id, today);
+  const doneToday = valueToday >= habit.target - 1e-6;
   const dueToday = isScheduledOn(habit, today);
+  const paused = isPaused(habit);
+  const total = totalLabel(habit, stats.all.totalValue, stats.all.completedDays);
+  const run = (p: Promise<unknown>) => p.catch((e) => showError('No se pudo guardar', e));
 
   const onDayPress = (d: string) => {
     if (d > today) return;
-    const count = getCount(logs, habit.id, d);
-    // En el calendario se marca/desmarca el día completo.
-    setCount(habit.id, d, count >= habit.targetPerDay ? 0 : habit.targetPerDay);
-    if (count < habit.targetPerDay) haptics.success();
+    if (habit.trackingType === 'quantity' || habit.trackingType === 'duration') {
+      router.push(logRoute(habit, d));
+      return;
+    }
+    // Simple y frecuencia: el calendario marca o desmarca el día completo.
+    const v = getValue(logs, habit.id, d);
+    if (v < habit.target) haptics.success();
+    run(setValue(habit.id, d, v >= habit.target ? 0 : habit.target));
   };
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-canvas dark:bg-canvas-dark">
       <View className="flex-row items-center justify-between px-5 py-2">
-        <IconButton icon={ChevronLeft} label="Volver" onPress={() => goBack()} size={40} />
+        <IconButton icon={ChevronLeft} label="Volver" onPress={() => goBack('/habits')} size={40} />
         <IconButton icon={Pencil} label="Editar" onPress={() => router.push(`/habit/edit/${habit.id}`)} size={40} />
       </View>
 
@@ -85,49 +152,49 @@ export default function HabitDetailScreen() {
             </Txt>
           ) : null}
           <View className="mt-3 flex-row flex-wrap justify-center gap-2">
-            <View className="rounded-full bg-subtle px-3 py-1 dark:bg-subtle-dark">
-              <Txt variant="caption">{describeFrequency(habit)}</Txt>
-            </View>
-            {habit.targetPerDay > 1 ? (
-              <View className="rounded-full bg-subtle px-3 py-1 dark:bg-subtle-dark">
-                <Txt variant="caption">
-                  Meta: {habit.targetPerDay} {habit.unit ?? 'veces'}
-                </Txt>
-              </View>
-            ) : null}
-            {habit.reminderEnabled && habit.reminderTime ? (
-              <View className="flex-row items-center gap-1 rounded-full bg-subtle px-3 py-1 dark:bg-subtle-dark">
-                <Bell size={12} color={t.muted} />
-                <Txt variant="caption">{habit.reminderTime}</Txt>
-              </View>
-            ) : null}
-            {habit.archived ? (
-              <View className="rounded-full bg-warning/15 px-3 py-1">
-                <Txt variant="caption" className="text-warning dark:text-warning">
-                  Archivado
-                </Txt>
-              </View>
-            ) : null}
+            <Pill>{CATEGORIES[habit.category].label}</Pill>
+            <Pill>{describeFrequency(habit)}</Pill>
+            {habit.trackingType !== 'check' ? <Pill>{`Meta: ${describeTarget(habit)}`}</Pill> : null}
+            {habit.suggestedTime ? <Pill icon={Clock}>{habit.suggestedTime}</Pill> : null}
+            {habit.reminderTimes.length ? <Pill icon={Bell}>{[...habit.reminderTimes].sort().join(' · ')}</Pill> : null}
+            {habit.endDate ? <Pill icon={CalendarRange}>{`Hasta ${formatEs(habit.endDate, 'd MMM yyyy')}`}</Pill> : null}
+            {paused ? <Pill icon={Pause} tone="warning">Pausado</Pill> : null}
+            {habit.archived ? <Pill tone="warning">Archivado</Pill> : null}
           </View>
         </Animated.View>
 
         {!habit.archived && dueToday ? (
-          <Button
-            className="mt-5"
-            variant={doneToday ? 'secondary' : 'primary'}
-            icon={CircleCheck}
-            title={
-              doneToday
-                ? 'Completado hoy · tocar para deshacer'
-                : habit.targetPerDay > 1
-                  ? `Sumar uno (${countToday}/${habit.targetPerDay})`
-                  : 'Marcar como hecho hoy'
-            }
-            onPress={() => {
-              if (!doneToday && (habit.targetPerDay <= 1 || countToday + 1 >= habit.targetPerDay)) haptics.success();
-              toggle(habit.id, today);
-            }}
-          />
+          habit.trackingType === 'check' || habit.trackingType === 'count' ? (
+            <Button
+              className="mt-5"
+              variant={doneToday ? 'secondary' : 'primary'}
+              icon={CircleCheck}
+              title={
+                doneToday
+                  ? 'Completado hoy · tocar para deshacer'
+                  : habit.trackingType === 'count'
+                    ? `Sumar una vez (${describeProgress(habit, valueToday)})`
+                    : 'Marcar como hecho hoy'
+              }
+              onPress={() => {
+                if (!doneToday && (habit.trackingType === 'check' || valueToday + 1 >= habit.target)) haptics.success();
+                run(quickAction(habit.id, today));
+              }}
+            />
+          ) : (
+            <Button
+              className="mt-5"
+              variant={doneToday ? 'secondary' : 'primary'}
+              icon={Plus}
+              title={`Registrar progreso · ${describeProgress(habit, valueToday)}`}
+              onPress={() => router.push(logRoute(habit, today))}
+            />
+          )
+        ) : null}
+        {paused ? (
+          <Txt variant="caption" className="mt-3 text-center">
+            En pausa desde el {formatEs(habit.pauses[habit.pauses.length - 1].from, "d 'de' MMMM")}. No aparece en tus días ni rompe rachas.
+          </Txt>
         ) : null}
 
         <View className="mt-5 flex-row gap-3">
@@ -142,13 +209,7 @@ export default function HabitDetailScreen() {
             value={`${Math.round(stats.month.rate * 100)}%`}
             hint={`${stats.month.completedDays} de ${stats.month.scheduledDays} días`}
           />
-          <StatTile
-            icon={CircleCheck}
-            color={t.brand}
-            label="Total"
-            value={`${stats.all.completedDays}`}
-            hint={`desde ${formatEs(habit.startDate, "d MMM yyyy")}`}
-          />
+          <StatTile icon={Sigma} color={t.brand} label={`Desde ${formatEs(habit.startDate, 'd MMM')}`} value={total.value} hint={total.hint} />
         </View>
 
         <SectionHeader title="Historial" />
@@ -157,27 +218,47 @@ export default function HabitDetailScreen() {
           <HeatLegend color={habit.color} />
         </Card>
         <Txt variant="caption" className="mt-2 text-center">
-          Toca un día pasado para marcarlo o desmarcarlo.
+          {habit.trackingType === 'check' || habit.trackingType === 'count'
+            ? 'Toca un día pasado para marcarlo o desmarcarlo.'
+            : 'Toca un día pasado para registrar o corregir su progreso.'}
         </Txt>
 
         <SectionHeader title="Opciones" />
         <View className="gap-3">
+          {!habit.archived ? (
+            <Button
+              variant="secondary"
+              icon={paused ? Play : Pause}
+              title={paused ? 'Reanudar hábito' : 'Pausar hábito'}
+              onPress={() => {
+                haptics.light();
+                run(setPaused(habit.id, !paused));
+              }}
+            />
+          ) : null}
           <Button
             variant="secondary"
             icon={habit.archived ? ArchiveArrowUp : Archive}
             title={habit.archived ? 'Restaurar hábito' : 'Archivar hábito'}
-            onPress={() => setArchived(habit.id, !habit.archived)}
+            onPress={() => run(setArchived(habit.id, !habit.archived))}
           />
           <Button
             variant="danger"
             icon={Trash}
             title="Eliminar hábito"
             onPress={() =>
-              confirmAction('Eliminar hábito', `Se eliminará "${habit.name}" y su historial. Esta acción no se puede deshacer.`, 'Eliminar', async () => {
-                haptics.warning();
-                goBack();
-                await deleteHabit(habit.id);
-              })
+              confirmAction(
+                'Eliminar hábito',
+                stats.daysWithData > 0
+                  ? `Se eliminará «${habit.name}» junto con su historial de ${stats.daysWithData} ${stats.daysWithData === 1 ? 'día' : 'días'} registrados. Esta acción no se puede deshacer.\n\nSi solo quieres dejar de verlo, archívalo o páusalo.`
+                  : `Se eliminará «${habit.name}». Esta acción no se puede deshacer.`,
+                'Eliminar',
+                async () => {
+                  haptics.warning();
+                  goBack('/habits');
+                  await deleteHabit(habit.id).catch((e) => showError('No se pudo eliminar', e));
+                },
+              )
             }
           />
         </View>

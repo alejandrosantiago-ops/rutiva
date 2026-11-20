@@ -58,7 +58,9 @@ export default function RootLayout() {
             <Stack.Screen name="habit/new" options={{ presentation: 'modal' }} />
             <Stack.Screen name="habit/edit/[id]" options={{ presentation: 'modal' }} />
             <Stack.Screen name="habit/[id]" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="habit/log/[id]" options={{ presentation: 'modal' }} />
             <Stack.Screen name="sleep/new" options={{ presentation: 'modal' }} />
+            <Stack.Screen name="water" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
           </Stack>
         )}

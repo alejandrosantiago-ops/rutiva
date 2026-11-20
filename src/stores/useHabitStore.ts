@@ -1,40 +1,54 @@
 import { create } from 'zustand';
 import { repositories } from '@/repositories';
-import { getCount } from '@/domain/habits';
+import type { HabitPatch } from '@/repositories';
+import { shiftKey, todayKey } from '@/domain/dates';
+import { getValue, isPaused } from '@/domain/habits';
+import { isWaterHabit, mlToUnit, unitToMl, waterTotals } from '@/domain/water';
 import type { DateKey, Habit, HabitInput, LogIndex } from '@/domain/types';
 import { cancelNotifications, scheduleHabitReminders } from '@/services/notifications';
 import { useSettingsStore } from './useSettingsStore';
+import { useWaterStore } from './useWaterStore';
 
 interface HabitState {
   habits: Habit[];
+  /** Progreso guardado por hábito y día. Para el progreso efectivo usa `useLogIndex()`. */
   logs: LogIndex;
   loaded: boolean;
   load: () => Promise<void>;
   createHabit: (input: HabitInput) => Promise<Habit>;
   updateHabit: (id: string, input: Partial<HabitInput>) => Promise<Habit>;
   setArchived: (id: string, archived: boolean) => Promise<void>;
+  setPaused: (id: string, paused: boolean) => Promise<void>;
   deleteHabit: (id: string) => Promise<void>;
   reorder: (orderedIds: string[]) => Promise<void>;
-  setCount: (habitId: string, date: DateKey, count: number) => Promise<void>;
-  /** Marca/desmarca; en hábitos con meta >1 suma uno hasta completar y luego reinicia. */
-  toggle: (habitId: string, date: DateKey) => Promise<number>;
-  /** Reprograma los recordatorios de todos los hábitos (p. ej. al cambiar el ajuste global). */
+  /** Fija el progreso del día (en la unidad del hábito). */
+  setValue: (habitId: string, date: DateKey, value: number) => Promise<void>;
+  /** Suma (o resta, si es negativo) progreso al día. */
+  addProgress: (habitId: string, date: DateKey, delta: number) => Promise<void>;
+  /** Acción rápida del botón: marca/desmarca (simple) o suma una vez (frecuencia). */
+  quickAction: (habitId: string, date: DateKey) => Promise<number>;
+  /** Reprograma los recordatorios de todos los hábitos. */
   rescheduleAll: () => Promise<void>;
 }
 
 const notificationsOn = () => useSettingsStore.getState().settings.notificationsEnabled;
 
-function withCount(logs: LogIndex, habitId: string, date: DateKey, count: number): LogIndex {
+function withValue(logs: LogIndex, habitId: string, date: DateKey, value: number): LogIndex {
   const day = { ...(logs[date] ?? {}) };
-  if (count > 0) day[habitId] = count;
+  if (value > 0) day[habitId] = value;
   else delete day[habitId];
   return { ...logs, [date]: day };
 }
 
+/** Progreso actual teniendo en cuenta el módulo de agua. */
+function currentValue(habit: Habit, logs: LogIndex, date: DateKey): number {
+  if (!isWaterHabit(habit)) return getValue(logs, habit.id, date);
+  return mlToUnit(waterTotals(useWaterStore.getState().logs)[date] ?? 0, habit.unit);
+}
+
 export const useHabitStore = create<HabitState>((set, get) => {
-  /** Programa recordatorios y guarda los ids devueltos. */
   async function syncReminders(habit: Habit): Promise<Habit> {
-    const ids = await scheduleHabitReminders(habit, notificationsOn()).catch(() => []);
+    const ids = await scheduleHabitReminders(habit, notificationsOn()).catch(() => [] as string[]);
     const same = ids.length === habit.notificationIds.length && ids.every((id, i) => id === habit.notificationIds[i]);
     if (same) return habit;
     return repositories.habits.update(habit.id, { notificationIds: ids });
@@ -42,6 +56,12 @@ export const useHabitStore = create<HabitState>((set, get) => {
 
   function replace(habit: Habit) {
     set((s) => ({ habits: s.habits.map((h) => (h.id === habit.id ? habit : h)) }));
+  }
+
+  async function patch(id: string, changes: HabitPatch) {
+    const updated = await repositories.habits.update(id, changes);
+    replace(updated);
+    replace(await syncReminders(updated));
   }
 
   return {
@@ -52,7 +72,7 @@ export const useHabitStore = create<HabitState>((set, get) => {
     async load() {
       const [habits, logs] = await Promise.all([repositories.habits.list(), repositories.logs.list()]);
       const index: LogIndex = {};
-      for (const l of logs) (index[l.date] ??= {})[l.habitId] = l.count;
+      for (const l of logs) (index[l.date] ??= {})[l.habitId] = l.value;
       set({ habits, logs: index, loaded: true });
     },
 
@@ -65,17 +85,28 @@ export const useHabitStore = create<HabitState>((set, get) => {
     },
 
     async updateHabit(id, input) {
-      const updated = await repositories.habits.update(id, input);
-      replace(updated);
-      const synced = await syncReminders(updated);
-      replace(synced);
-      return synced;
+      await patch(id, input);
+      return get().habits.find((h) => h.id === id)!;
     },
 
     async setArchived(id, archived) {
-      const updated = await repositories.habits.update(id, { archived });
-      replace(updated);
-      replace(await syncReminders(updated));
+      await patch(id, { archived });
+    },
+
+    async setPaused(id, paused) {
+      const habit = get().habits.find((h) => h.id === id);
+      if (!habit || isPaused(habit) === paused) return;
+      const today = todayKey();
+      let pauses = [...habit.pauses];
+      if (paused) {
+        pauses.push({ from: today, to: null });
+      } else {
+        const last = pauses[pauses.length - 1];
+        // Pausado y reanudado el mismo día: no deja rastro.
+        if (last.from >= today) pauses = pauses.slice(0, -1);
+        else pauses[pauses.length - 1] = { ...last, to: shiftKey(today, -1) };
+      }
+      await patch(id, { pauses });
     },
 
     async deleteHabit(id) {
@@ -93,26 +124,36 @@ export const useHabitStore = create<HabitState>((set, get) => {
       await repositories.habits.reorder(orderedIds);
     },
 
-    async setCount(habitId, date, count) {
-      const previous = getCount(get().logs, habitId, date);
-      const next = Math.max(0, count);
-      set((s) => ({ logs: withCount(s.logs, habitId, date, next) }));
+    async setValue(habitId, date, value) {
+      const habit = get().habits.find((h) => h.id === habitId);
+      if (!habit) return;
+      const next = Math.max(0, value);
+      // Los hábitos de agua viven en el módulo de hidratación.
+      if (isWaterHabit(habit)) return useWaterStore.getState().setDayTotal(date, unitToMl(next, habit.unit));
+
+      const previous = getValue(get().logs, habitId, date);
+      set((s) => ({ logs: withValue(s.logs, habitId, date, next) }));
       try {
-        await repositories.logs.setCount(habitId, date, next);
+        await repositories.logs.setValue(habitId, date, next);
       } catch (error) {
-        set((s) => ({ logs: withCount(s.logs, habitId, date, previous) }));
+        set((s) => ({ logs: withValue(s.logs, habitId, date, previous) }));
         throw error;
       }
     },
 
-    async toggle(habitId, date) {
+    async addProgress(habitId, date, delta) {
+      const habit = get().habits.find((h) => h.id === habitId);
+      if (!habit) return;
+      if (isWaterHabit(habit) && delta > 0) return useWaterStore.getState().add(date, unitToMl(delta, habit.unit));
+      await get().setValue(habitId, date, currentValue(habit, get().logs, date) + delta);
+    },
+
+    async quickAction(habitId, date) {
       const habit = get().habits.find((h) => h.id === habitId);
       if (!habit) return 0;
-      const current = getCount(get().logs, habitId, date);
-      let next: number;
-      if (habit.targetPerDay <= 1) next = current >= 1 ? 0 : 1;
-      else next = current >= habit.targetPerDay ? 0 : current + 1;
-      await get().setCount(habitId, date, next);
+      const current = currentValue(habit, get().logs, date);
+      const next = current >= habit.target ? 0 : habit.trackingType === 'count' ? current + 1 : habit.target;
+      await get().setValue(habitId, date, next);
       return next;
     },
 

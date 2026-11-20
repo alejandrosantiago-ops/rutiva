@@ -11,19 +11,25 @@ export default function EditHabitScreen() {
 
   return (
     <HabitForm
+      isNew={false}
       title="Editar hábito"
       submitLabel="Guardar cambios"
       initial={{
         name: habit.name,
         description: habit.description,
+        category: habit.category,
         icon: habit.icon,
         color: habit.color,
+        trackingType: habit.trackingType,
+        target: habit.target,
+        unit: habit.unit,
         frequency: habit.frequency,
         daysOfWeek: habit.daysOfWeek,
-        targetPerDay: habit.targetPerDay,
-        unit: habit.unit,
-        reminderEnabled: habit.reminderEnabled,
-        reminderTime: habit.reminderTime ?? '09:00',
+        intervalDays: Math.max(2, habit.intervalDays),
+        startDate: habit.startDate,
+        endDate: habit.endDate,
+        suggestedTime: habit.suggestedTime,
+        reminderTimes: habit.reminderTimes,
       }}
       onSubmit={async (input) => {
         await updateHabit(habit.id, input);

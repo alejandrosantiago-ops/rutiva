@@ -65,3 +65,6 @@ export function withAlpha(hex: string, alpha: number): string {
     .padStart(2, '0');
   return `${hex}${a}`;
 }
+
+/** Color del módulo de hidratación. */
+export const WATER_COLOR = '#06B6D4';

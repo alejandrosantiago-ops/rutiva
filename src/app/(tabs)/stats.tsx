@@ -10,6 +10,7 @@ import { useHabitStore } from '@/stores/useHabitStore';
 import { useSleepStore } from '@/stores/useSleepStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useToday } from '@/hooks/useToday';
+import { useLogIndex } from '@/hooks/useLogIndex';
 import { useTheme } from '@/theme/colors';
 import { Screen } from '@/components/ui/layout';
 import { Card, EmptyState, IconBadge, PressableScale, SectionHeader, StatTile, Txt } from '@/components/ui/primitives';
@@ -24,7 +25,7 @@ export default function StatsScreen() {
   const t = useTheme();
   const today = useToday();
   const habits = useHabitStore((s) => s.habits);
-  const logs = useHabitStore((s) => s.logs);
+  const logs = useLogIndex();
   const sleepLogs = useSleepStore((s) => s.logs);
   const { weekStartsOn, sleepGoalMinutes } = useSettingsStore((s) => s.settings);
   const [range, setRange] = useState<Range>('7');

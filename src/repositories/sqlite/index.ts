@@ -1,8 +1,7 @@
 import * as Crypto from 'expo-crypto';
 import { getDb } from '@/db/client';
-import { todayKey } from '@/domain/dates';
 import { computeSleepWindow } from '@/domain/sleep';
-import type { AppSettings, Habit, HabitLog, SleepLog, Weekday } from '@/domain/types';
+import type { AppSettings, Habit, HabitLog, PausePeriod, SleepLog, WaterLog, Weekday } from '@/domain/types';
 import type { BackupPayload, Repositories } from '../types';
 
 const now = () => new Date().toISOString();
@@ -14,18 +13,23 @@ interface HabitRow {
   id: string;
   name: string;
   description: string | null;
+  category: Habit['category'];
   icon: string;
   color: string;
-  frequency: 'daily' | 'custom';
-  days_of_week: string;
-  target_per_day: number;
+  tracking_type: Habit['trackingType'];
+  target: number;
   unit: string | null;
-  reminder_enabled: number;
-  reminder_time: string | null;
+  frequency: Habit['frequency'];
+  days_of_week: string;
+  interval_days: number;
+  start_date: string;
+  end_date: string | null;
+  suggested_time: string | null;
+  reminder_times: string;
   notification_ids: string;
+  pauses: string;
   archived: number;
   sort_order: number;
-  start_date: string;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -35,7 +39,17 @@ interface LogRow {
   id: string;
   habit_id: string;
   date: string;
+  /** Columna histórica: guarda el valor del día (REAL desde v2). */
   count: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+interface WaterRow {
+  id: string;
+  date: string;
+  amount_ml: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -66,18 +80,23 @@ const toHabit = (r: HabitRow): Habit => ({
   id: r.id,
   name: r.name,
   description: r.description,
+  category: r.category,
   icon: r.icon,
   color: r.color,
+  trackingType: r.tracking_type,
+  target: r.target,
+  unit: r.unit,
   frequency: r.frequency,
   daysOfWeek: parseJson<Weekday[]>(r.days_of_week, [0, 1, 2, 3, 4, 5, 6]),
-  targetPerDay: r.target_per_day,
-  unit: r.unit,
-  reminderEnabled: r.reminder_enabled === 1,
-  reminderTime: r.reminder_time,
+  intervalDays: r.interval_days,
+  startDate: r.start_date,
+  endDate: r.end_date,
+  suggestedTime: r.suggested_time,
+  reminderTimes: parseJson<string[]>(r.reminder_times, []),
   notificationIds: parseJson<string[]>(r.notification_ids, []),
+  pauses: parseJson<PausePeriod[]>(r.pauses, []),
   archived: r.archived === 1,
   sortOrder: r.sort_order,
-  startDate: r.start_date,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   deletedAt: r.deleted_at,
@@ -87,7 +106,16 @@ const toLog = (r: LogRow): HabitLog => ({
   id: r.id,
   habitId: r.habit_id,
   date: r.date,
-  count: r.count,
+  value: r.count,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+  deletedAt: r.deleted_at,
+});
+
+const toWater = (r: WaterRow): WaterLog => ({
+  id: r.id,
+  date: r.date,
+  amountMl: r.amount_ml,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   deletedAt: r.deleted_at,
@@ -106,23 +134,33 @@ const toSleep = (r: SleepRow): SleepLog => ({
   deletedAt: r.deleted_at,
 });
 
-/** Columnas editables de un hábito → nombre de columna y serializador. */
-const HABIT_COLUMNS: { [K in keyof Habit]?: [string, (v: Habit[K]) => string | number | null] } = {
-  name: ['name', (v) => v],
-  description: ['description', (v) => v],
-  icon: ['icon', (v) => v],
-  color: ['color', (v) => v],
-  frequency: ['frequency', (v) => v],
-  daysOfWeek: ['days_of_week', (v) => JSON.stringify(v)],
-  targetPerDay: ['target_per_day', (v) => v],
-  unit: ['unit', (v) => v],
-  reminderEnabled: ['reminder_enabled', (v) => (v ? 1 : 0)],
-  reminderTime: ['reminder_time', (v) => v],
-  notificationIds: ['notification_ids', (v) => JSON.stringify(v)],
-  archived: ['archived', (v) => (v ? 1 : 0)],
-  sortOrder: ['sort_order', (v) => v],
-  startDate: ['start_date', (v) => v],
-  deletedAt: ['deleted_at', (v) => v],
+type Sql = string | number | null;
+const json = (v: unknown) => JSON.stringify(v);
+const bool = (v: unknown) => (v ? 1 : 0);
+const same = (v: unknown) => v as Sql;
+
+/** Campo del dominio → columna y serializador. */
+const HABIT_COLUMNS: Partial<Record<keyof Habit, [string, (v: unknown) => Sql]>> = {
+  name: ['name', same],
+  description: ['description', same],
+  category: ['category', same],
+  icon: ['icon', same],
+  color: ['color', same],
+  trackingType: ['tracking_type', same],
+  target: ['target', same],
+  unit: ['unit', same],
+  frequency: ['frequency', same],
+  daysOfWeek: ['days_of_week', json],
+  intervalDays: ['interval_days', same],
+  startDate: ['start_date', same],
+  endDate: ['end_date', same],
+  suggestedTime: ['suggested_time', same],
+  reminderTimes: ['reminder_times', json],
+  notificationIds: ['notification_ids', json],
+  pauses: ['pauses', json],
+  archived: ['archived', bool],
+  sortOrder: ['sort_order', same],
+  deletedAt: ['deleted_at', same],
 };
 
 export const sqliteRepositories: Repositories = {
@@ -143,44 +181,29 @@ export const sqliteRepositories: Repositories = {
         ...input,
         id: uuid(),
         notificationIds: [],
+        pauses: [],
         archived: false,
         sortOrder: (max?.m ?? -1) + 1,
-        startDate: todayKey(),
         createdAt: ts,
         updatedAt: ts,
         deletedAt: null,
       };
-      await db.runAsync(
-        `INSERT INTO habits (id, name, description, icon, color, frequency, days_of_week, target_per_day, unit,
-          reminder_enabled, reminder_time, notification_ids, archived, sort_order, start_date, created_at, updated_at, deleted_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-        habit.id,
-        habit.name,
-        habit.description,
-        habit.icon,
-        habit.color,
-        habit.frequency,
-        JSON.stringify(habit.daysOfWeek),
-        habit.targetPerDay,
-        habit.unit,
-        habit.reminderEnabled ? 1 : 0,
-        habit.reminderTime,
-        '[]',
-        0,
-        habit.sortOrder,
-        habit.startDate,
-        ts,
-        ts,
-      );
+      const entries = (Object.keys(HABIT_COLUMNS) as (keyof Habit)[]).map((k) => {
+        const [col, ser] = HABIT_COLUMNS[k]!;
+        return [col, ser(habit[k])] as const;
+      });
+      const cols = ['id', 'created_at', 'updated_at', ...entries.map((e) => e[0])];
+      const values: Sql[] = [habit.id, ts, ts, ...entries.map((e) => e[1])];
+      await db.runAsync(`INSERT INTO habits (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, ...values);
       return habit;
     },
 
     async update(id, patch) {
       const db = await getDb();
       const sets: string[] = [];
-      const values: (string | number | null)[] = [];
+      const values: Sql[] = [];
       for (const key of Object.keys(patch) as (keyof Habit)[]) {
-        const column = HABIT_COLUMNS[key] as [string, (v: unknown) => string | number | null] | undefined;
+        const column = HABIT_COLUMNS[key];
         if (!column) continue;
         sets.push(`${column[0]} = ?`);
         values.push(column[1](patch[key as keyof typeof patch]));
@@ -217,11 +240,12 @@ export const sqliteRepositories: Repositories = {
       return rows.map(toLog);
     },
 
-    async setCount(habitId, date, count) {
+    async setValue(habitId, date, value) {
       const db = await getDb();
       const ts = now();
-      const safe = Math.max(0, Math.round(count));
-      // Upsert: un registro por hábito y día. Un conteo 0 se conserva como "desmarcado".
+      // Redondeo a 3 decimales para evitar arrastrar errores de coma flotante.
+      const safe = Math.max(0, Math.round(value * 1000) / 1000);
+      // Un registro por hábito y día. Un valor 0 se conserva como "desmarcado".
       await db.runAsync(
         `INSERT INTO habit_logs (id, habit_id, date, count, created_at, updated_at, deleted_at)
          VALUES (?, ?, ?, ?, ?, ?, NULL)
@@ -238,6 +262,35 @@ export const sqliteRepositories: Repositories = {
     },
   },
 
+  water: {
+    async list() {
+      const db = await getDb();
+      const rows = await db.getAllAsync<WaterRow>('SELECT * FROM water_logs WHERE deleted_at IS NULL ORDER BY created_at ASC');
+      return rows.map(toWater);
+    },
+
+    async add(date, amountMl) {
+      const db = await getDb();
+      const ts = now();
+      const log: WaterLog = { id: uuid(), date, amountMl: Math.round(amountMl), createdAt: ts, updatedAt: ts, deletedAt: null };
+      await db.runAsync(
+        'INSERT INTO water_logs (id, date, amount_ml, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)',
+        log.id,
+        log.date,
+        log.amountMl,
+        ts,
+        ts,
+      );
+      return log;
+    },
+
+    async remove(id) {
+      const db = await getDb();
+      const ts = now();
+      await db.runAsync('UPDATE water_logs SET deleted_at = ?, updated_at = ? WHERE id = ?', ts, ts, id);
+    },
+  },
+
   sleep: {
     async list() {
       const db = await getDb();
@@ -251,7 +304,7 @@ export const sqliteRepositories: Repositories = {
       const window = computeSleepWindow(input.date, input.bedtime, input.wakeTime);
       let result!: SleepLog;
       await db.withTransactionAsync(async () => {
-        // Si se edita y cambia la fecha, o ya existe otra noche ese día, se reemplaza.
+        // Si ya existe otra noche con esa fecha, se reemplaza.
         const clash = await db.getFirstAsync<SleepRow>(
           'SELECT * FROM sleep_logs WHERE date = ? AND deleted_at IS NULL AND id != ?',
           input.date,
@@ -322,27 +375,32 @@ export const sqliteRepositories: Repositories = {
   },
 
   async exportAll(): Promise<BackupPayload> {
-    const [habits, habitLogs, sleepLogs, settings] = await Promise.all([
+    const [habits, habitLogs, waterLogs, sleepLogs, settings] = await Promise.all([
       this.habits.list(),
       this.logs.list(),
+      this.water.list(),
       this.sleep.list(),
       this.settings.load(),
     ]);
     return {
       app: 'rutiva',
-      version: 1,
+      version: 2,
       exportedAt: now(),
       habits: habits.map((h) => ({ ...h, notificationIds: [] })),
       habitLogs,
+      waterLogs,
       sleepLogs,
-      settings: { ...settings, bedtimeNotificationId: null },
+      // Los ids de notificaciones y el cronómetro son propios de este dispositivo.
+      settings: { ...settings, bedtimeNotificationId: null, waterNotificationIds: [], activeTimer: null },
     };
   },
 
   async resetAll() {
     const db = await getDb();
     await db.withTransactionAsync(async () => {
-      await db.execAsync('DELETE FROM habit_logs; DELETE FROM habits; DELETE FROM sleep_logs; DELETE FROM settings;');
+      await db.execAsync(
+        'DELETE FROM habit_logs; DELETE FROM habits; DELETE FROM water_logs; DELETE FROM sleep_logs; DELETE FROM settings;',
+      );
     });
   },
 };

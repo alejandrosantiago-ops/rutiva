@@ -2,9 +2,9 @@ import { useState, type ReactNode } from 'react';
 import { Platform, Switch, Text, TextInput, type TextInputProps, View } from 'react-native';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import Animated, { useAnimatedStyle, withSpring } from 'react-native-reanimated';
-import { Check, ChevronRight, Clock, Minus, Plus, type LucideIcon } from 'lucide-react-native';
-import { minutesToTime, timeToMinutes, WEEKDAY_SHORT } from '@/domain/dates';
-import type { TimeOfDay, Weekday } from '@/domain/types';
+import { BellPlus, CalendarDays, Check, ChevronLeft, ChevronRight, Clock, Minus, Plus, X, type LucideIcon } from 'lucide-react-native';
+import { formatEs, fromKey, minutesToTime, shiftKey, timeToMinutes, toKey, WEEKDAY_SHORT } from '@/domain/dates';
+import type { DateKey, TimeOfDay, Weekday } from '@/domain/types';
 import { useTheme } from '@/theme/colors';
 import { haptics } from '@/lib/haptics';
 import { HABIT_ICONS, HABIT_ICON_KEYS } from '@/components/habits/habitIcons';
@@ -390,6 +390,217 @@ export function WeekdayPicker({
           </PressableScale>
         );
       })}
+    </View>
+  );
+}
+
+// ---------- Selector de fecha ----------
+
+export function DateField({
+  value,
+  onChange,
+  label,
+  minimumDate,
+}: {
+  value: DateKey;
+  onChange: (v: DateKey) => void;
+  label: string;
+  minimumDate?: DateKey;
+}) {
+  const t = useTheme();
+  const [open, setOpen] = useState(false);
+  const pretty = formatEs(value, "EEE d 'de' MMM yyyy");
+
+  if (Platform.OS === 'web') {
+    const prev = shiftKey(value, -1);
+    const canPrev = !minimumDate || prev >= minimumDate;
+    return (
+      <View className="flex-row items-center justify-between rounded-2xl border border-line bg-card px-4 py-2 dark:border-line-dark dark:bg-card-dark">
+        <Txt variant="label">{label}</Txt>
+        <View className="flex-row items-center gap-2">
+          <PressableScale accessibilityLabel="Día anterior" disabled={!canPrev} onPress={() => onChange(prev)} className={cx('p-2', !canPrev && 'opacity-30')}>
+            <ChevronLeft size={18} color={t.ink} />
+          </PressableScale>
+          <Txt variant="label" className="min-w-[120px] text-center">
+            {pretty}
+          </Txt>
+          <PressableScale accessibilityLabel="Día siguiente" onPress={() => onChange(shiftKey(value, 1))} className="p-2">
+            <ChevronRight size={18} color={t.ink} />
+          </PressableScale>
+        </View>
+      </View>
+    );
+  }
+
+  const openPicker = () => {
+    haptics.light();
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: fromKey(value),
+        mode: 'date',
+        minimumDate: minimumDate ? fromKey(minimumDate) : undefined,
+        onChange: (event, date) => {
+          if (event.type === 'set' && date) onChange(toKey(date));
+        },
+      });
+    } else {
+      setOpen((o) => !o);
+    }
+  };
+
+  return (
+    <View className="overflow-hidden rounded-2xl border border-line bg-card dark:border-line-dark dark:bg-card-dark">
+      <PressableScale scaleTo={0.98} onPress={openPicker} className="flex-row items-center gap-3 px-4 py-3.5">
+        <CalendarDays size={18} color={t.brand} />
+        <Txt variant="label" className="flex-1">
+          {label}
+        </Txt>
+        <View className="rounded-xl bg-subtle px-3 py-1.5 dark:bg-subtle-dark">
+          <Txt variant="label">{pretty}</Txt>
+        </View>
+      </PressableScale>
+      {open && Platform.OS === 'ios' ? (
+        <DateTimePicker
+          value={fromKey(value)}
+          mode="date"
+          display="inline"
+          locale="es-ES"
+          themeVariant={t.scheme}
+          accentColor={t.brand}
+          minimumDate={minimumDate ? fromKey(minimumDate) : undefined}
+          onChange={(_, date) => date && onChange(toKey(date))}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+// ---------- Número decimal ----------
+
+/** Acepta "2,5" o "2.5". Devuelve null si no es un número positivo. */
+export function parseDecimal(text: string): number | null {
+  const n = Number(text.replace(',', '.').trim());
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function NumberField({
+  value,
+  onChange,
+  placeholder,
+  suffix,
+  className,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+  placeholder?: string;
+  suffix?: string;
+  className?: string;
+}) {
+  const [text, setText] = useState(value === null ? '' : String(value));
+  return (
+    <View className={cx('flex-row items-center gap-2', className)}>
+      <TextField
+        className="flex-1"
+        value={text}
+        keyboardType="decimal-pad"
+        placeholder={placeholder}
+        onChangeText={(v) => {
+          const clean = v.replace(/[^0-9.,]/g, '');
+          setText(clean);
+          onChange(parseDecimal(clean));
+        }}
+      />
+      {suffix ? <Txt variant="label">{suffix}</Txt> : null}
+    </View>
+  );
+}
+
+// ---------- Grupo de chips ----------
+
+export function ChipGroup<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string; icon?: LucideIcon; color?: string }[];
+  value: T | null;
+  onChange: (v: T) => void;
+}) {
+  const t = useTheme();
+  return (
+    <View className="flex-row flex-wrap gap-2">
+      {options.map((o) => {
+        const selected = o.value === value;
+        const color = o.color ?? t.brand;
+        const Icon = o.icon;
+        return (
+          <PressableScale
+            key={o.value}
+            scaleTo={0.94}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            onPress={() => {
+              haptics.selection();
+              onChange(o.value);
+            }}
+            className={cx(
+              'h-9 flex-row items-center gap-1.5 rounded-full border px-3.5',
+              !selected && 'border-line bg-card dark:border-line-dark dark:bg-card-dark',
+            )}
+            style={selected ? { backgroundColor: color, borderColor: color } : undefined}
+          >
+            {Icon ? <Icon size={14} color={selected ? '#FFFFFF' : color} strokeWidth={2.4} /> : null}
+            <Text className={cx('text-[13px] font-semibold', selected ? 'text-white' : 'text-ink dark:text-ink-dark')}>{o.label}</Text>
+          </PressableScale>
+        );
+      })}
+    </View>
+  );
+}
+
+// ---------- Lista de recordatorios ----------
+
+const MAX_REMINDERS = 5;
+
+export function ReminderTimesField({ value, onChange }: { value: TimeOfDay[]; onChange: (v: TimeOfDay[]) => void }) {
+  const t = useTheme();
+  const add = () => {
+    const last = value[value.length - 1];
+    const next = last ? minutesToTime(Math.min(timeToMinutes(last) + 120, 23 * 60 + 55)) : '09:00';
+    onChange([...value, next]);
+  };
+  return (
+    <View className="gap-2.5">
+      {value.map((time, i) => (
+        <View key={i} className="flex-row items-center gap-2">
+          <View className="flex-1">
+            <TimeField
+              label={`Recordatorio ${i + 1}`}
+              value={time}
+              onChange={(v) => onChange(value.map((x, j) => (j === i ? v : x)))}
+            />
+          </View>
+          <PressableScale
+            accessibilityLabel={`Quitar recordatorio ${i + 1}`}
+            onPress={() => onChange(value.filter((_, j) => j !== i))}
+            className="h-11 w-11 items-center justify-center rounded-xl bg-subtle dark:bg-subtle-dark"
+          >
+            <X size={18} color={t.muted} />
+          </PressableScale>
+        </View>
+      ))}
+      {value.length < MAX_REMINDERS ? (
+        <PressableScale
+          haptic
+          onPress={add}
+          className="h-12 flex-row items-center justify-center gap-2 rounded-2xl border border-dashed border-line dark:border-line-dark"
+        >
+          <BellPlus size={18} color={t.brand} />
+          <Text className="text-[14px] font-semibold text-brand-500 dark:text-brand-300">
+            {value.length ? 'Añadir otro recordatorio' : 'Añadir recordatorio'}
+          </Text>
+        </PressableScale>
+      ) : null}
     </View>
   );
 }

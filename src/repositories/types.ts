@@ -1,4 +1,13 @@
-import type { AppSettings, DateKey, Habit, HabitInput, HabitLog, SleepInput, SleepLog } from '@/domain/types';
+import type {
+  AppSettings,
+  DateKey,
+  Habit,
+  HabitInput,
+  HabitLog,
+  SleepInput,
+  SleepLog,
+  WaterLog,
+} from '@/domain/types';
 
 /**
  * Contratos de persistencia. La UI y los stores solo dependen de estas
@@ -6,10 +15,12 @@ import type { AppSettings, DateKey, Habit, HabitInput, HabitLog, SleepInput, Sle
  * implementarlas un adaptador remoto (Supabase) o uno con sincronización.
  */
 
+export type HabitPatch = Partial<Omit<Habit, 'id' | 'createdAt' | 'updatedAt'>>;
+
 export interface HabitRepository {
   list(): Promise<Habit[]>;
   create(input: HabitInput): Promise<Habit>;
-  update(id: string, patch: Partial<Omit<Habit, 'id' | 'createdAt'>>): Promise<Habit>;
+  update(id: string, patch: HabitPatch): Promise<Habit>;
   /** Borrado lógico (deja tombstone para sincronizar). */
   remove(id: string): Promise<void>;
   reorder(orderedIds: string[]): Promise<void>;
@@ -17,7 +28,14 @@ export interface HabitRepository {
 
 export interface HabitLogRepository {
   list(): Promise<HabitLog[]>;
-  setCount(habitId: string, date: DateKey, count: number): Promise<HabitLog>;
+  /** Fija el progreso de un hábito en una fecha (upsert). */
+  setValue(habitId: string, date: DateKey, value: number): Promise<HabitLog>;
+}
+
+export interface WaterRepository {
+  list(): Promise<WaterLog[]>;
+  add(date: DateKey, amountMl: number): Promise<WaterLog>;
+  remove(id: string): Promise<void>;
 }
 
 export interface SleepRepository {
@@ -38,6 +56,7 @@ export interface BackupPayload {
   exportedAt: string;
   habits: Habit[];
   habitLogs: HabitLog[];
+  waterLogs: WaterLog[];
   sleepLogs: SleepLog[];
   settings: Partial<AppSettings>;
 }
@@ -45,6 +64,7 @@ export interface BackupPayload {
 export interface Repositories {
   habits: HabitRepository;
   logs: HabitLogRepository;
+  water: WaterRepository;
   sleep: SleepRepository;
   settings: SettingsRepository;
   exportAll(): Promise<BackupPayload>;

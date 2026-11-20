@@ -1,10 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bestStreak, currentStreak, dayProgress, describeFrequency, habitStats, isScheduledOn } from '../src/domain/habits.ts';
+import {
+  bestStreak,
+  currentStreak,
+  dayProgress,
+  describeFrequency,
+  describeProgress,
+  describeRemaining,
+  habitStats,
+  isPaused,
+  isScheduledOn,
+  nextHabit,
+  perfectDayStreak,
+} from '../src/domain/habits.ts';
 import { computeSleepWindow, summarizeSleep, bedtimeOffset } from '../src/domain/sleep.ts';
 import { minutesToTime, rangeKeys, shiftKey, timeToMinutes } from '../src/domain/dates.ts';
 import { overview, weekdayPerformance } from '../src/domain/stats.ts';
-import type { Habit, LogIndex, SleepLog } from '../src/domain/types.ts';
+import { isWaterHabit, mergeWaterIntoIndex, waterReminderSlots, waterTotals } from '../src/domain/water.ts';
+import type { Habit, LogIndex, SleepLog, WaterLog } from '../src/domain/types.ts';
 
 const META = { createdAt: '', updatedAt: '', deletedAt: null };
 
@@ -14,25 +27,30 @@ function habit(over: Partial<Habit> = {}): Habit {
     id: 'h1',
     name: 'Leer',
     description: null,
+    category: 'study',
     icon: 'book',
     color: '#5B5BD6',
+    trackingType: 'check',
+    target: 1,
+    unit: null,
     frequency: 'daily',
     daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
-    targetPerDay: 1,
-    unit: null,
-    reminderEnabled: false,
-    reminderTime: null,
+    intervalDays: 1,
+    startDate: '2026-11-01',
+    endDate: null,
+    suggestedTime: null,
+    reminderTimes: [],
     notificationIds: [],
+    pauses: [],
     archived: false,
     sortOrder: 0,
-    startDate: '2026-11-01',
     ...over,
   };
 }
 
-function logsFor(id: string, dates: string[], count = 1): LogIndex {
+function logsFor(id: string, dates: string[], value = 1): LogIndex {
   const idx: LogIndex = {};
-  for (const d of dates) idx[d] = { ...(idx[d] ?? {}), [id]: count };
+  for (const d of dates) idx[d] = { ...(idx[d] ?? {}), [id]: value };
   return idx;
 }
 
@@ -59,12 +77,36 @@ test('racha actual: un hueco la corta', () => {
   assert.equal(currentStreak(habit(), logs, TODAY), 2);
 });
 
-test('racha ignora días no programados', () => {
+test('días concretos: la racha ignora días no programados', () => {
   // Lunes, miércoles y viernes. 16=lun, 18=mié, 20=vie.
-  const h = habit({ frequency: 'custom', daysOfWeek: [1, 3, 5] });
+  const h = habit({ frequency: 'weekly', daysOfWeek: [1, 3, 5] });
   const logs = logsFor('h1', ['2026-11-16', '2026-11-18', '2026-11-20']);
   assert.equal(currentStreak(h, logs, TODAY), 3);
   assert.equal(isScheduledOn(h, '2026-11-19'), false);
+});
+
+test('intervalo: cada 3 días desde la fecha de inicio', () => {
+  const h = habit({ frequency: 'interval', intervalDays: 3, startDate: '2026-11-14' });
+  assert.equal(isScheduledOn(h, '2026-11-14'), true);
+  assert.equal(isScheduledOn(h, '2026-11-15'), false);
+  assert.equal(isScheduledOn(h, '2026-11-17'), true);
+  assert.equal(isScheduledOn(h, TODAY), true);
+  assert.equal(describeFrequency(h), 'Cada 3 días');
+});
+
+test('fecha de fin y pausas', () => {
+  const ended = habit({ endDate: '2026-11-18' });
+  assert.equal(isScheduledOn(ended, '2026-11-18'), true);
+  assert.equal(isScheduledOn(ended, '2026-11-19'), false);
+
+  const paused = habit({ pauses: [{ from: '2026-11-10', to: '2026-11-12' }, { from: '2026-11-19', to: null }] });
+  assert.equal(isScheduledOn(paused, '2026-11-11'), false);
+  assert.equal(isScheduledOn(paused, '2026-11-13'), true);
+  assert.equal(isScheduledOn(paused, TODAY), false);
+  assert.equal(isPaused(paused), true);
+  // Los días pausados no rompen la racha.
+  const logs = logsFor('h1', ['2026-11-09', '2026-11-13', '2026-11-14', '2026-11-15', '2026-11-16', '2026-11-17', '2026-11-18']);
+  assert.equal(currentStreak(paused, logs, TODAY), 7);
 });
 
 test('mejor racha', () => {
@@ -72,14 +114,33 @@ test('mejor racha', () => {
   assert.equal(bestStreak(habit(), logs, TODAY), 3);
 });
 
-test('meta por día: progreso parcial', () => {
-  const water = habit({ id: 'w', targetPerDay: 4 });
+test('progreso parcial y decimales', () => {
+  const water = habit({ id: 'w', trackingType: 'quantity', target: 2.5, unit: 'L', category: 'hydration' });
   const read = habit({ id: 'r' });
-  const logs: LogIndex = { [TODAY]: { w: 2, r: 1 } };
+  const logs: LogIndex = { [TODAY]: { w: 1.5, r: 1 } };
   const p = dayProgress([water, read], logs, TODAY);
   assert.equal(p.scheduled, 2);
   assert.equal(p.completed, 1);
-  assert.equal(p.ratio, 0.75);
+  assert.equal(p.ratio, 0.8);
+  // 0.1 + 0.2 debe contar como 0.3
+  const tiny = habit({ id: 't', trackingType: 'quantity', target: 0.3, unit: 'L' });
+  assert.equal(dayProgress([tiny], { [TODAY]: { t: 0.1 + 0.2 } }, TODAY).completed, 1);
+});
+
+test('textos de progreso por tipo', () => {
+  const water = habit({ trackingType: 'quantity', target: 2.5, unit: 'L' });
+  assert.equal(describeProgress(water, 1.5), '1.5 / 2.5 L');
+  assert.equal(describeRemaining(water, 1.5), 'faltan 1 L');
+  const gym = habit({ trackingType: 'duration', target: 60 });
+  assert.equal(describeProgress(gym, 60), '60 / 60 min');
+  assert.equal(describeRemaining(gym, 60), null);
+  assert.equal(describeRemaining(gym, 15), 'faltan 45 min');
+  const walk = habit({ trackingType: 'count', target: 2 });
+  assert.equal(describeProgress(walk, 1), '1 / 2 veces');
+  const glasses = habit({ trackingType: 'count', target: 8, unit: 'vasos' });
+  assert.equal(describeProgress(glasses, 2), '2 / 8 vasos');
+  assert.equal(describeRemaining(glasses, 2), 'faltan 6 vasos');
+  assert.equal(describeProgress(habit(), 0), 'Pendiente');
 });
 
 test('no cuenta días anteriores al inicio ni hábitos archivados', () => {
@@ -95,10 +156,48 @@ test('estadísticas por hábito: hoy pendiente no penaliza', () => {
   assert.equal(s.completedDays, 2);
 });
 
-test('describeFrequency', () => {
-  assert.equal(describeFrequency({ frequency: 'custom', daysOfWeek: [1, 2, 3, 4, 5] }), 'Entre semana');
-  assert.equal(describeFrequency({ frequency: 'custom', daysOfWeek: [6, 0] }), 'Fines de semana');
-  assert.equal(describeFrequency({ frequency: 'custom', daysOfWeek: [3, 1] }), 'Lun · Mié');
+test('racha de días perfectos', () => {
+  const a = habit({ id: 'a' });
+  const b = habit({ id: 'b', frequency: 'weekly', daysOfWeek: [1, 3, 5] });
+  const logs: LogIndex = {
+    '2026-11-16': { a: 1 }, // lunes: falta b → rompe
+    '2026-11-17': { a: 1 },
+    '2026-11-18': { a: 1, b: 1 },
+    '2026-11-19': { a: 1 },
+  };
+  assert.equal(perfectDayStreak([a, b], logs, TODAY), 3);
+});
+
+test('próximo hábito: el más cercano con hora, luego sin hora', () => {
+  const morning = habit({ id: 'm', suggestedTime: '07:00' });
+  const evening = habit({ id: 'e', suggestedTime: '19:00' });
+  const anytime = habit({ id: 'x' });
+  const now = timeToMinutes('12:00');
+  assert.equal(nextHabit([morning, evening, anytime], {}, TODAY, now)?.id, 'e');
+  assert.equal(nextHabit([morning, anytime], {}, TODAY, now)?.id, 'x');
+  assert.equal(nextHabit([morning], { [TODAY]: { m: 1 } }, TODAY, now), null);
+});
+
+test('hidratación: el módulo de agua alimenta el hábito', () => {
+  const w = habit({ id: 'w', category: 'hydration', trackingType: 'quantity', unit: 'L', target: 2.5 });
+  assert.equal(isWaterHabit(w), true);
+  assert.equal(isWaterHabit({ ...w, unit: 'vasos' }), false);
+  const logs: WaterLog[] = [
+    { ...META, id: '1', date: TODAY, amountMl: 250 },
+    { ...META, id: '2', date: TODAY, amountMl: 500 },
+    { ...META, id: '3', date: '2026-11-19', amountMl: 2500 },
+    { ...META, id: '4', date: TODAY, amountMl: 999, deletedAt: 'x' },
+  ];
+  const totals = waterTotals(logs);
+  assert.equal(totals[TODAY], 750);
+  const idx = mergeWaterIntoIndex({}, [w], totals);
+  assert.equal(idx[TODAY].w, 0.75);
+  assert.equal(currentStreak(w, idx, TODAY), 1); // ayer 2.5 L cumplido, hoy pendiente
+});
+
+test('franjas de recordatorio de agua', () => {
+  assert.deepEqual(waterReminderSlots(540, 720, 60), [540, 600, 660, 720]);
+  assert.deepEqual(waterReminderSlots(540, 720, 5), []);
 });
 
 test('sueño que cruza la medianoche', () => {
@@ -123,7 +222,7 @@ test('resumen de sueño promedia bien alrededor de medianoche', () => {
   });
   const logs = [mk('2026-11-19', '23:30', '07:30'), mk('2026-11-20', '00:30', '07:30')];
   const s = summarizeSleep(logs, 480);
-  assert.equal(s.avgBedtimeOffset, 0); // medianoche, no mediodía
+  assert.equal(s.avgBedtimeOffset, 0);
   assert.equal(s.avgMinutes, 450);
   assert.equal(s.goalHitRate, 0.5);
   assert.equal(bedtimeOffset(logs[0].bedtimeAt), -30);
@@ -132,9 +231,9 @@ test('resumen de sueño promedia bien alrededor de medianoche', () => {
 test('overview y rendimiento semanal', () => {
   const logs = logsFor('h1', ['2026-11-18', '2026-11-19']);
   const o = overview([habit()], logs, TODAY, 3, TODAY);
-  assert.equal(o.completionRate, 1); // hoy pendiente se excluye
+  assert.equal(o.completionRate, 1);
   assert.equal(o.perfectDays, 2);
   const wp = weekdayPerformance([habit()], logs, TODAY, 7, TODAY);
-  assert.equal(wp[3], 1); // miércoles 18
-  assert.equal(wp[6], 0); // sábado 14 sin registro
+  assert.equal(wp[3], 1);
+  assert.equal(wp[6], 0);
 });
