@@ -49,5 +49,6 @@
     "lint": "expo lint",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/"
   },
-  "private": true
+  "private": true,
+  "license": "UNLICENSED"
 }
