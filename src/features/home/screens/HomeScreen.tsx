@@ -1,7 +1,7 @@
-import { useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Text, View } from 'react-native';
 import { router } from 'expo-router';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown, useAnimatedStyle, useSharedValue, withSequence, withSpring } from 'react-native-reanimated';
 import { Activity, ChevronRight, Clock, Droplets, Flame, Moon, Plus, Settings, Timer } from 'lucide-react-native';
 import { formatDurationShort, formatEs, greeting } from '@/domain/dates';
 import {
@@ -21,12 +21,15 @@ import { useHabitStore } from '@/features/habits/store/useHabitStore';
 import { useSettingsStore } from '@/features/settings/store/useSettingsStore';
 import { useSleepStore } from '@/features/sleep/store/useSleepStore';
 import { useWaterStore } from '@/features/water/store/useWaterStore';
+import { useTimerStore } from '@/features/habits/store/timer';
+import { toast } from '@/ui/toast';
 import { useLogIndex, useWaterTotals } from '@/features/habits/hooks/useLogIndex';
 import { useSelectedDay, useToday } from '@/hooks/useToday';
 import { useTheme, WATER_COLOR } from '@/theme/colors';
 import { haptics } from '@/lib/haptics';
 import { showError } from '@/lib/dialogs';
 import { Screen } from '@/ui/layout';
+import { Fab } from '@/ui/fab';
 import { Card, IconBadge, IconButton, PressableScale, SectionHeader, Txt } from '@/ui/primitives';
 import { ProgressBar, ProgressRing } from '@/ui/progress';
 import { WeekStrip } from '@/features/habits/components/WeekStrip';
@@ -110,8 +113,23 @@ export default function HomeScreen() {
   const sleepLogs = useSleepStore((s) => s.logs);
   const waterTotals = useWaterTotals();
   const addWater = useWaterStore((s) => s.add);
+  const activeTimer = useTimerStore((s) => s.session);
 
   const progress = useMemo(() => dayProgress(habits, logs, selected), [habits, logs, selected]);
+
+  // Celebración discreta al completar todos los hábitos de hoy.
+  const pulse = useSharedValue(1);
+  const pulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulse.value }] }));
+  const wasComplete = useRef<boolean | null>(null);
+  const todayDone = selected === today && progress.scheduled > 0 && progress.completed === progress.scheduled;
+  useEffect(() => {
+    if (wasComplete.current === false && todayDone) {
+      haptics.success();
+      pulse.set(withSequence(withSpring(1.04, { damping: 6, stiffness: 300 }), withSpring(1, { damping: 12 })));
+      toast('¡Día completado! Todos tus hábitos están hechos.');
+    }
+    wasComplete.current = todayDone;
+  }, [todayDone, pulse]);
   const streak = useMemo(() => perfectDayStreak(habits, logs, today), [habits, logs, today]);
   const activity = useMemo(() => activitySummary(habits, logs, selected), [habits, logs, selected]);
   const now = new Date();
@@ -126,9 +144,10 @@ export default function HomeScreen() {
       subtitle={formatEs(today, "EEEE, d 'de' MMMM")}
       title={name ? `${greeting()}, ${name}` : greeting()}
       right={<IconButton icon={Settings} label="Configuración" onPress={() => router.push('/settings')} />}
+      fab={<Fab icon={Plus} label="Nuevo hábito" onPress={() => router.push('/habit/new')} />}
     >
       {/* Progreso del día */}
-      <Animated.View entering={FadeIn.duration(400)}>
+      <Animated.View entering={FadeIn.duration(400)} style={pulseStyle}>
         <View className="mt-4 rounded-4xl bg-brand-500 p-5 dark:bg-brand-600">
           <View className="flex-row items-center gap-5">
             <ProgressRing progress={progress.ratio} size={104} stroke={11} color="#FFFFFF" trackColor="rgba(255,255,255,0.22)">
@@ -207,7 +226,9 @@ export default function HomeScreen() {
               accessibilityLabel="Añadir 250 ml de agua"
               onPress={() => {
                 if (water < settings.waterGoalMl && water + 250 >= settings.waterGoalMl) haptics.success();
-                addWater(selected, 250).catch((e) => showError('No se pudo guardar', e));
+                addWater(selected, 250)
+                  .then((log) => log && toast('+250 ml de agua', { undo: () => useWaterStore.getState().remove(log.id) }))
+                  .catch((e) => showError('No se pudo guardar', e));
               }}
               className="h-8 flex-row items-center rounded-full px-2"
               style={{ backgroundColor: `${WATER_COLOR}22` }}
@@ -258,16 +279,7 @@ export default function HomeScreen() {
       <SectionHeader
         title={isToday ? 'Hábitos de hoy' : formatEs(selected, "EEEE d 'de' MMMM")}
         action={
-          isToday ? (
-            <PressableScale
-              haptic
-              onPress={() => router.push('/habit/new')}
-              className="flex-row items-center gap-1 rounded-full bg-brand-50 px-3 py-1.5 dark:bg-brand-900/50"
-            >
-              <Plus size={15} color={t.brand} strokeWidth={2.6} />
-              <Text className="text-[13px] font-semibold text-brand-500 dark:text-brand-300">Nuevo</Text>
-            </PressableScale>
-          ) : (
+          isToday ? undefined : (
             <PressableScale onPress={() => setSelected(today)}>
               <Text className="text-[13px] font-semibold text-brand-500 dark:text-brand-300">Volver a hoy</Text>
             </PressableScale>
@@ -275,11 +287,9 @@ export default function HomeScreen() {
         }
       />
       <DayHabitList date={selected} today={today} />
-      {settings.activeTimer ? (
+      {activeTimer?.habitId ? (
         <PressableScale
-          onPress={() =>
-            router.push({ pathname: '/habit/log/[id]', params: { id: settings.activeTimer!.habitId, date: settings.activeTimer!.date } })
-          }
+          onPress={() => router.push({ pathname: '/habit/log/[id]', params: { id: activeTimer.habitId!, date: activeTimer.date ?? today } })}
         >
           <View className="mt-1 flex-row items-center justify-center gap-2 rounded-2xl bg-success/10 py-3">
             <Timer size={16} color={t.success} />

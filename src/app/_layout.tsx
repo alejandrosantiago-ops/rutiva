@@ -9,7 +9,10 @@ import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
 import { useBootstrap } from '@/hooks/useBootstrap';
 import { useTheme } from '@/theme/colors';
-import { Txt } from '@/ui/primitives';
+import { Button, Txt } from '@/ui/primitives';
+import { ToastHost } from '@/ui/toast';
+import { RotateCcw } from 'lucide-react-native';
+import type { ErrorBoundaryProps } from 'expo-router';
 
 function useNotificationNavigation() {
   useEffect(() => {
@@ -22,8 +25,26 @@ function useNotificationNavigation() {
   }, []);
 }
 
+/** Pantalla de error si algo falla al renderizar (en lugar de cerrarse la app). */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  return (
+    <View className="flex-1 items-center justify-center bg-canvas px-8 dark:bg-canvas-dark">
+      <Txt variant="heading" className="text-center">
+        Algo salió mal
+      </Txt>
+      <Txt variant="caption" className="mt-2 text-center">
+        {error.message}
+      </Txt>
+      <Txt variant="caption" className="mt-1 text-center">
+        Tus datos están a salvo en el dispositivo.
+      </Txt>
+      <Button className="mt-6 w-48" title="Reintentar" icon={RotateCcw} onPress={retry} />
+    </View>
+  );
+}
+
 export default function RootLayout() {
-  const { ready, error } = useBootstrap();
+  const { ready, error, retry } = useBootstrap();
   const t = useTheme();
   useNotificationNavigation();
 
@@ -47,6 +68,7 @@ export default function RootLayout() {
                 <Txt variant="caption" className="mt-2 text-center">
                   {error.message}
                 </Txt>
+                <Button className="mt-6 w-48" title="Reintentar" icon={RotateCcw} onPress={retry} />
               </>
             ) : (
               <ActivityIndicator color={t.brand} />
@@ -62,8 +84,10 @@ export default function RootLayout() {
             <Stack.Screen name="sleep/new" options={{ presentation: 'modal' }} />
             <Stack.Screen name="water" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="welcome" options={{ animation: 'fade', gestureEnabled: false }} />
           </Stack>
         )}
+        <ToastHost />
       </ThemeProvider>
     </GestureHandlerRootView>
   );

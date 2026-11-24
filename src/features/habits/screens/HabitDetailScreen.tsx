@@ -1,3 +1,4 @@
+import { toast } from '@/ui/toast';
 import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
@@ -232,7 +233,13 @@ export default function HabitDetailScreen() {
               title={paused ? 'Reanudar hábito' : 'Pausar hábito'}
               onPress={() => {
                 haptics.light();
-                run(setPaused(habit.id, !paused));
+                run(
+                  setPaused(habit.id, !paused).then(() =>
+                    toast(paused ? 'Hábito reanudado' : 'Hábito en pausa: no contará hasta que lo reanudes', {
+                      undo: () => setPaused(habit.id, paused),
+                    }),
+                  ),
+                );
               }}
             />
           ) : null}
@@ -240,7 +247,13 @@ export default function HabitDetailScreen() {
             variant="secondary"
             icon={habit.archived ? ArchiveArrowUp : Archive}
             title={habit.archived ? 'Restaurar hábito' : 'Archivar hábito'}
-            onPress={() => run(setArchived(habit.id, !habit.archived))}
+            onPress={() =>
+              run(
+                setArchived(habit.id, !habit.archived).then(() =>
+                  toast(habit.archived ? 'Hábito restaurado' : 'Hábito archivado', { undo: () => setArchived(habit.id, habit.archived) }),
+                ),
+              )
+            }
           />
           <Button
             variant="danger"
@@ -256,7 +269,12 @@ export default function HabitDetailScreen() {
                 async () => {
                   haptics.warning();
                   goBack('/habits');
-                  await deleteHabit(habit.id).catch((e) => showError('No se pudo eliminar', e));
+                  try {
+                    await deleteHabit(habit.id);
+                    toast(`«${habit.name}» eliminado`, { undo: () => useHabitStore.getState().restoreHabit(habit.id) });
+                  } catch (e) {
+                    showError('No se pudo eliminar', e);
+                  }
                 },
               )
             }

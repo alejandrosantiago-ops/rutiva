@@ -1,26 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
-import { MIGRATIONS } from '../src/data/db/migrations.ts';
+import { runMigrations } from '../src/data/db/migrate.ts';
+import { createNodeDb } from './helpers/nodeDb.ts';
 
-/** Reproduce el proceso de src/db/client.ts sobre un SQLite real. */
-function migrate(db: DatabaseSync, upTo: number) {
-  db.exec('PRAGMA foreign_keys = OFF;');
-  let version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-  while (version < upTo) {
-    db.exec('BEGIN');
-    db.exec(MIGRATIONS[version]);
-    db.exec(`PRAGMA user_version = ${version + 1}`);
-    db.exec('COMMIT');
-    version++;
-  }
-  assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
-  db.exec('PRAGMA foreign_keys = ON;');
+/** Usa el mismo ejecutor de migraciones que la app, sobre SQLite real. */
+async function migrate(conn: ReturnType<typeof createNodeDb>, upTo: number) {
+  await runMigrations(conn, undefined, upTo);
 }
 
-test('v1 → v2 conserva hábitos e historial y mapea los campos', () => {
-  const db = new DatabaseSync(':memory:');
-  migrate(db, 1);
+test('v1 → v2 conserva hábitos e historial y mapea los campos', async () => {
+  const conn = createNodeDb();
+  const db = conn.raw;
+  await migrate(conn, 1);
   const ts = '2026-11-01T00:00:00.000Z';
   const insert = db.prepare(`INSERT INTO habits (id, name, description, icon, color, frequency, days_of_week, target_per_day,
     unit, reminder_enabled, reminder_time, notification_ids, archived, sort_order, start_date, created_at, updated_at)
@@ -34,7 +25,7 @@ test('v1 → v2 conserva hábitos e historial y mapea los campos', () => {
     'l2', 'b', '2026-11-18', 1, ts, ts,
   );
 
-  migrate(db, 2);
+  await migrate(conn, 2);
 
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM habit_logs').get() as { n: number }).n, 2, 'el historial debe sobrevivir');
   const a = db.prepare('SELECT * FROM habits WHERE id = ?').get('a') as Record<string, unknown>;
@@ -63,9 +54,10 @@ test('v1 → v2 conserva hábitos e historial y mapea los campos', () => {
   assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 2);
 });
 
-test('v2 → v3: archivados pasan a pausa y el sueño recibe origen', () => {
-  const db = new DatabaseSync(':memory:');
-  migrate(db, 2);
+test('v2 → v3: archivados pasan a pausa y el sueño recibe origen', async () => {
+  const conn = createNodeDb();
+  const db = conn.raw;
+  await migrate(conn, 2);
   const ts = '2026-11-10T12:00:00.000Z';
   const insert = db.prepare(`INSERT INTO habits (id, name, icon, color, days_of_week, start_date, archived, pauses, created_at, updated_at)
     VALUES (?, 'x', 'target', '#000', '[0,1,2,3,4,5,6]', '2026-11-01', ?, ?, ?, ?)`);
@@ -75,7 +67,7 @@ test('v2 → v3: archivados pasan a pausa y el sueño recibe origen', () => {
   db.prepare(`INSERT INTO sleep_logs (id, date, bedtime_at, wake_at, duration_minutes, created_at, updated_at)
     VALUES ('s', '2026-11-10', 'a', 'b', 480, ?, ?)`).run(ts, ts);
 
-  migrate(db, 3);
+  await migrate(conn, 3);
 
   const pauses = (id: string) => JSON.parse((db.prepare('SELECT pauses FROM habits WHERE id = ?').get(id) as { pauses: string }).pauses);
   assert.deepEqual(pauses('arch'), [{ from: '2026-11-10', to: null, reason: 'archive' }]);
@@ -87,9 +79,22 @@ test('v2 → v3: archivados pasan a pausa y el sueño recibe origen', () => {
   assert.equal(h.schedule_history, '[]');
 });
 
-test('instalación nueva aplica todas las migraciones', () => {
-  const db = new DatabaseSync(':memory:');
-  migrate(db, MIGRATIONS.length);
+test('instalación nueva aplica todas las migraciones', async () => {
+  const conn = createNodeDb();
+  const db = conn.raw;
+  await runMigrations(conn);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((r) => (r as { name: string }).name);
-  assert.deepEqual(tables, ['habit_logs', 'habits', 'settings', 'sleep_logs', 'water_logs']);
+  assert.deepEqual(tables, [
+    'alarms',
+    'categories',
+    'habit_logs',
+    'habit_pauses',
+    'habit_schedules',
+    'habits',
+    'scheduled_notifications',
+    'sleep_logs',
+    'timed_sessions',
+    'user_settings',
+    'water_logs',
+  ]);
 });

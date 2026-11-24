@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Platform, View } from 'react-native';
-import { Tabs } from 'expo-router';
+import { Redirect, Tabs } from 'expo-router';
+import { useSettingsStore } from '@/features/settings/store/useSettingsStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { CalendarDays, ChartColumn, House, ListChecks, Moon, type LucideIcon } from 'lucide-react-native';
@@ -38,6 +39,10 @@ export default function TabsLayout() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const bottom = Math.max(insets.bottom, Platform.OS === 'android' ? 10 : 8);
+  const onboarded = useSettingsStore((s) => s.settings.onboarded);
+
+  // Primera vez: formulario de bienvenida para configurar los primeros hábitos.
+  if (!onboarded) return <Redirect href="/welcome" />;
 
   return (
     <Tabs

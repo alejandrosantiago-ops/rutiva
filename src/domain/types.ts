@@ -135,14 +135,29 @@ export interface SleepLog extends SyncMeta {
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type WaterUnit = 'ml' | 'L';
 
-/** Cronómetro en curso de un hábito por duración (sobrevive a cerrar la app). */
-export interface ActiveTimer {
-  habitId: string;
-  date: DateKey;
-  /** Momento en que se reanudó por última vez; null si está en pausa. */
+/**
+ * Sesión temporizada: cronómetro de un hábito por duración o sesión de sueño
+ * ("Voy a dormir"). Se guarda en la tabla `timed_sessions`, así sobrevive a
+ * cerrar la app y queda un historial de sesiones terminadas o descartadas.
+ */
+export type SessionKind = 'habit' | 'sleep';
+export type SessionStatus = 'running' | 'paused' | 'finished' | 'discarded';
+
+export interface TimedSession {
+  id: string;
+  kind: SessionKind;
+  /** Solo en sesiones de hábito. */
+  habitId: string | null;
+  /** Día al que se suma el tiempo (hábitos). */
+  date: DateKey | null;
+  startedAt: ISODateTime;
+  /** Momento en que se reanudó por última vez; null si está en pausa o terminada. */
   runningSince: ISODateTime | null;
   /** Milisegundos acumulados en tramos anteriores. */
   accumulatedMs: number;
+  status: SessionStatus;
+  endedAt: ISODateTime | null;
+  resultMinutes: number | null;
 }
 
 export interface AppSettings {
@@ -162,9 +177,8 @@ export interface AppSettings {
   waterReminderEnd: TimeOfDay;
   waterReminderEveryMinutes: number;
   waterNotificationIds: string[];
-  activeTimer: ActiveTimer | null;
-  /** Sesión de sueño en curso ("Voy a dormir"); sobrevive a cerrar la app. */
-  sleepSession: { startedAt: ISODateTime } | null;
+  /** false hasta completar la bienvenida inicial. */
+  onboarded: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -184,8 +198,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   waterReminderEnd: '21:00',
   waterReminderEveryMinutes: 120,
   waterNotificationIds: [],
-  activeTimer: null,
-  sleepSession: null,
+  onboarded: false,
 };
 
 /** Índice en memoria de progreso: fecha → hábito → valor. */

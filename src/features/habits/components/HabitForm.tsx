@@ -1,3 +1,4 @@
+import { toast } from '@/ui/toast';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { Check, Droplets } from 'lucide-react-native';
@@ -113,6 +114,7 @@ export function HabitForm({
       });
       haptics.success();
       goBack();
+      toast(isNew ? 'Hábito creado' : 'Cambios guardados');
     } catch (e) {
       showError('No se pudo guardar', e);
       setSaving(false);

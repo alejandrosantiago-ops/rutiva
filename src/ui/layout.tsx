@@ -12,12 +12,15 @@ export function Screen({
   subtitle,
   right,
   scroll = true,
+  fab,
 }: {
   children: ReactNode;
   title?: string;
   subtitle?: string;
   right?: ReactNode;
   scroll?: boolean;
+  /** Botón flotante (acción principal al alcance del pulgar). */
+  fab?: ReactNode;
 }) {
   const header = title ? (
     <View className="flex-row items-end justify-between pb-2 pt-3">
@@ -49,6 +52,7 @@ export function Screen({
           {children}
         </View>
       )}
+      {fab}
     </SafeAreaView>
   );
 }

@@ -14,7 +14,7 @@ npx expo start --web    # vista web para desarrollo
 | --- | --- |
 | `npm run typecheck` | Comprobación de tipos con TypeScript |
 | `npx eslint src` | Lint (configuración de Expo + React Compiler) |
-| `npm test` | Tests de la lógica de dominio (rachas, progreso, sueño, estadísticas) |
+| `npm test` | Pruebas con `node --test` (dominio, zonas horarias, cronómetros, recordatorios, migraciones y persistencia sobre SQLite real) |
 | `npx expo-doctor` | Revisa la compatibilidad de las dependencias con el SDK |
 
 > Expo Go basta para todo, notificaciones locales incluidas. Para publicar en las tiendas usa EAS Build (`npx eas-cli@latest build`).
@@ -40,7 +40,15 @@ Expo SDK 58 · React Native 0.88 · TypeScript · Expo Router · NativeWind 4 (T
   - Preparado para **Health Connect** (Android) y **HealthKit** (iOS) en `src/services/health/`: contrato, adaptadores e importador que pide permiso explícito, solo lee sesiones de sueño y no duplica ni pisa registros manuales. Activarlo requiere un *development build* (ver comentarios en `providers.ts`).
 - **Calendario**: mes actual con navegación, días completos (relleno), parciales (tono + porcentaje), sin cumplir (punto rojo) y en pausa (guion), día actual resaltado y resumen del mes. Al tocar una fecha muestra cada hábito con su estado («completado», «2.5 / 2.5 L», «no completado») y el progreso total; desde ahí se pueden corregir los registros. Filtro por hábito individual (incluidos los archivados).
 - **Estadísticas** (siempre desde registros reales): cumplimiento de hoy, de la semana y del mes; racha actual y mejor racha histórica de días completos; gráfico de líneas diario, barras semanales y calendario de actividad; hábitos con mayor y menor cumplimiento; horas totales de entrenamiento y de estudio; agua de hoy y promedio diario; promedio de sueño; rendimiento por día de la semana.
-- **Configuración**, como en la primera versión.
+- **Configuración**: nombre, tema, notificaciones, recordatorio nocturno, metas, inicio de semana, vibración, exportar copia y restablecer.
+
+### Experiencia de uso
+
+- **Bienvenida inicial** (solo la primera vez): nombre, primeros hábitos con su meta ajustable y metas de agua y sueño. Se puede omitir.
+- **Deshacer**: desmarcar un hábito, añadir o borrar agua, sumar o fijar progreso, finalizar un cronómetro, pausar, archivar y eliminar muestran un aviso con «Deshacer» durante unos segundos. Eliminar además pide confirmación e indica cuánto historial se perdería.
+- **Feedback al guardar** con avisos breves, animación y vibración al completar un hábito y celebración discreta al completar el día.
+- **Una mano**: barra inferior, botón flotante «+» en la esquina inferior derecha y acciones principales de los formularios abajo.
+- Modo claro/oscuro, estados vacíos explicativos, estados de carga y una pantalla de error con «Reintentar» si algo falla.
 
 ### Cómo se evalúa cada día
 
@@ -57,25 +65,70 @@ Expo SDK 58 · React Native 0.88 · TypeScript · Expo Router · NativeWind 4 (T
 
 ## Arquitectura
 
+Organizada por **módulos funcionales**; dentro de cada uno se separan pantallas, componentes, estado y hooks.
+
 ```
 src/
-  app/                 Rutas de Expo Router (cada archivo es una pantalla)
-    (tabs)/            Inicio, Hábitos, Calendario, Sueño, Estadísticas
-    habit/             new, [id] (detalle), edit/[id]
-    sleep/new          Registro / edición de sueño (?id=)
-    settings           Configuración
-  domain/              Lógica pura sin React: tipos, fechas, rachas, sueño, estadísticas
-  db/                  Conexión SQLite y migraciones versionadas (PRAGMA user_version)
-  repositories/        Interfaces de persistencia + implementación SQLite
-  stores/              Estado global con Zustand (actualizaciones optimistas)
-  services/            Notificaciones locales
-  components/          UI reutilizable (ui/, habits/, calendar/, sleep/, stats/)
-  theme/               Paleta (compartida con Tailwind) y colores para props JS
-  hooks/ lib/          Utilidades (fecha actual, progreso efectivo, hápticos, diálogos, navegación)
-tests/                 Tests de dominio y de migraciones sobre SQLite real (node --test)
+  app/                     Rutas de Expo Router: archivos finos que reexportan pantallas
+  features/                Módulos funcionales
+    home/        screens/
+    habits/      screens/ components/ store/ (hábitos, cronómetro) hooks/
+    calendar/    screens/ components/
+    sleep/       screens/ components/ store/ (registros, sesión, recordatorio)
+    water/       screens/ store/
+    stats/       screens/ components/ (gráficos)
+    settings/    screens/ store/
+    onboarding/  screens/
+  domain/                  Tipos TypeScript y lógica pura (fechas, rachas, programación,
+                           sueño, agua, estadísticas, cronómetro, planificación de recordatorios)
+  data/
+    db/                    Conexión, interfaz Db, ejecutor de migraciones y migraciones
+    repositories/          Contratos + implementación SQLite (factory inyectable)
+  services/
+    notifications/         Gestión de notificaciones (planificador puro + pasarela Expo)
+    health/                Integración futura con Health Connect / HealthKit
+  ui/                      Componentes visuales compartidos (tarjetas, formularios, progreso, avisos)
+  hooks/                   Hooks compartidos (arranque, fecha actual)
+  lib/                     Utilidades (hápticos, diálogos, navegación, calendario)
+  theme/                   Paleta y colores
+tests/                     node --test con un loader que resuelve los alias "@/"
 ```
 
-El flujo es: **pantallas → stores (Zustand) → repositorios (interfaces) → SQLite**. Las pantallas nunca usan SQL directamente.
+Flujo: **pantallas → stores (Zustand) → repositorios (interfaces) → SQLite**. Las pantallas nunca usan SQL. La lógica de dominio no depende de React ni de Expo, por eso se prueba directamente.
+
+## Base de datos
+
+SQLite con migraciones versionadas (`PRAGMA user_version`), cada una en su transacción y con verificación de claves foráneas al terminar (`src/data/db/`).
+
+| Tabla | Contenido | Integridad |
+| --- | --- | --- |
+| `categories` | Catálogo de categorías | nombre único |
+| `habits` | **Definición** del hábito (nombre, categoría, tipo, unidad, fechas, hora sugerida) | FK a `categories`, CHECK de tipo y fechas |
+| `habit_schedules` | **Programación y meta versionadas** (`valid_from` / `valid_until`, días como máscara de bits, intervalo, meta) | FK, CHECK, una sola versión vigente por hábito, sin solapes por fecha de inicio |
+| `habit_pauses` | Pausas y archivados | FK, una sola pausa abierta por hábito |
+| `habit_logs` | **Cumplimiento** de un hábito en una fecha | FK, único `(habit_id, date)` (upsert), `value >= 0` |
+| `water_logs` | Cada registro de agua | `amount_ml > 0` |
+| `sleep_logs` | Noches (manual, estimado o importado) | una noche activa por fecha, `external_id` único, FK a la sesión |
+| `timed_sessions` | Cronómetros y sesiones «Voy a dormir» (activas, terminadas, descartadas) | una sola activa por tipo |
+| `alarms` | Recordatorios: por hábito y hora, agua (ventana + intervalo) y hora de dormir | FK, único `(habit_id, time)`, agua y hora de dormir únicas |
+| `scheduled_notifications` | Ids de los avisos programados en este dispositivo, por alarma | FK con borrado en cascada |
+| `user_settings` | Preferencias del usuario (clave/valor) | clave única |
+
+Los hábitos **no se crean cada día**: la app calcula qué toca en cada fecha a partir de `habit_schedules` y `habit_pauses` y solo guarda el progreso en `habit_logs`. Al editar la frecuencia o la meta se cierra la versión anterior, así el pasado no cambia. Archivar abre una pausa, de modo que el historial anterior sigue visible; eliminar es un borrado lógico (`deleted_at`) que se puede deshacer.
+
+## Pruebas
+
+`npm test` ejecuta las pruebas sobre el código real (sin mocks de dominio):
+
+- **Cumplimiento** diario, semanal y mensual, días previos a la creación, rankings.
+- **Repetición** diaria, semanal y por intervalos; cambios de programación y de meta.
+- **Fecha y zona horaria**: cambio de día a medianoche local y semanas con cambio de hora en 5 zonas, noche del cambio de hora (Madrid) y recordatorios por fecha a la hora local correcta.
+- **Agua**: totales, hábitos sincronizados con el módulo, persistencia y deshacer.
+- **Cronómetros**: iniciar, pausar, reanudar, finalizar, descartar y reconstruir tras cerrar la app.
+- **Sueño**: noches que cruzan medianoche, latencia, validaciones y comparación con la meta.
+- **Rachas** por hábito y de días completos (actual y mejor).
+- **Persistencia** con `node:sqlite`: repositorios, restricciones (duplicados, claves foráneas, CHECK), borrado lógico, reinicio y migraciones v1 → v4 con datos.
+- **Recordatorios**: plan por tipo de hábito, límite de iOS, edición (cancela los anteriores) y cancelación al pausar o desactivar.
 
 ## Integrar Supabase o PostgreSQL más adelante
 
@@ -88,9 +141,9 @@ El esquema ya está preparado para sincronizar:
 
 Pasos:
 
-1. Crea en Supabase las tablas `habits`, `habit_logs`, `sleep_logs` y `settings` con las mismas columnas (ver `src/db/migrations.ts`), y añade `user_id uuid references auth.users` con políticas RLS.
-2. Implementa la interfaz `Repositories` (`src/repositories/types.ts`) en `src/repositories/supabase/`, o mejor, un adaptador que siga escribiendo en SQLite y sincronice en segundo plano los registros con `updated_at` posterior a la última sincronización.
-3. Cambia la implementación exportada en `src/repositories/index.ts`. Ni los stores ni las pantallas tienen que cambiar.
+1. Crea en Supabase las tablas del apartado *Base de datos* (ver `src/data/db/v4.ts`), excepto `scheduled_notifications`, que es local del dispositivo, y añade `user_id uuid references auth.users` con políticas RLS.
+2. Implementa la interfaz `Repositories` (`src/data/repositories/types.ts`), o mejor, un adaptador que siga escribiendo en SQLite y sincronice en segundo plano los registros con `updated_at` posterior a la última sincronización.
+3. Cambia la implementación exportada en `src/data/repositories/index.ts`. Ni los stores ni las pantallas tienen que cambiar.
 4. Añade la autenticación (Supabase Auth) como una ruta nueva en `src/app/`.
 
 ## Notas

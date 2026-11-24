@@ -1,52 +1,86 @@
-import * as Crypto from 'expo-crypto';
-import { getDb } from '@/data/db/client';
 import { sleepDuration } from '@/domain/sleep';
-import type { AppSettings, Habit, HabitLog, HabitRule, PausePeriod, SleepLog, WaterLog, Weekday } from '@/domain/types';
-import type { BackupPayload, Repositories } from '@/data/repositories/types';
+import type {
+  AppSettings,
+  Habit,
+  HabitCategory,
+  HabitLog,
+  HabitRule,
+  PausePeriod,
+  SessionKind,
+  SleepLog,
+  TimedSession,
+  WaterLog,
+  Weekday,
+} from '@/domain/types';
+import type { Db, SqlValue } from '../db/types';
+import { scheduleRows } from '../db/v4';
+import type { BackupPayload, Repositories } from './types';
 
-const now = () => new Date().toISOString();
-const uuid = () => Crypto.randomUUID();
+/**
+ * Implementación SQLite de los repositorios sobre el esquema relacional (v4).
+ * Es una factory: recibe la conexión y el generador de ids, así se ejecuta
+ * igual en la app (expo-sqlite) y en las pruebas (node:sqlite).
+ */
+export interface SqliteDeps {
+  getDb: () => Promise<Db>;
+  uuid: () => string;
+  now?: () => string;
+}
 
-// ---------- Filas tal como están en SQLite ----------
+// ---------- Filas ----------
 
 interface HabitRow {
   id: string;
   name: string;
   description: string | null;
-  category: Habit['category'];
+  category_id: HabitCategory;
   icon: string;
   color: string;
   tracking_type: Habit['trackingType'];
-  target: number;
   unit: string | null;
-  frequency: Habit['frequency'];
-  days_of_week: string;
-  interval_days: number;
   start_date: string;
   end_date: string | null;
   suggested_time: string | null;
-  reminder_times: string;
-  notification_ids: string;
-  pauses: string;
-  schedule_history: string;
   archived: number;
   sort_order: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
 }
-
+interface ScheduleRow {
+  habit_id: string;
+  valid_from: string;
+  valid_until: string | null;
+  frequency: Habit['frequency'];
+  days_mask: number;
+  interval_days: number;
+  target: number;
+}
+interface PauseRow {
+  habit_id: string;
+  start_date: string;
+  end_date: string | null;
+  reason: 'pause' | 'archive';
+}
+interface AlarmRow {
+  id: string;
+  kind: 'habit' | 'water' | 'bedtime';
+  habit_id: string | null;
+  time: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  every_minutes: number | null;
+  enabled: number;
+}
 interface LogRow {
   id: string;
   habit_id: string;
   date: string;
-  /** Columna histórica: guarda el valor del día (REAL desde v2). */
-  count: number;
+  value: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
 }
-
 interface WaterRow {
   id: string;
   date: string;
@@ -55,7 +89,6 @@ interface WaterRow {
   updated_at: string;
   deleted_at: string | null;
 }
-
 interface SleepRow {
   id: string;
   date: string;
@@ -71,6 +104,20 @@ interface SleepRow {
   updated_at: string;
   deleted_at: string | null;
 }
+interface SessionRow {
+  id: string;
+  kind: SessionKind;
+  habit_id: string | null;
+  log_date: string | null;
+  started_at: string;
+  running_since: string | null;
+  accumulated_ms: number;
+  status: TimedSession['status'];
+  ended_at: string | null;
+  result_minutes: number | null;
+}
+
+const maskToDays = (mask: number): Weekday[] => [0, 1, 2, 3, 4, 5, 6].filter((d) => mask & (1 << d)) as Weekday[];
 
 function parseJson<T>(raw: string, fallback: T): T {
   try {
@@ -80,38 +127,11 @@ function parseJson<T>(raw: string, fallback: T): T {
   }
 }
 
-const toHabit = (r: HabitRow): Habit => ({
-  id: r.id,
-  name: r.name,
-  description: r.description,
-  category: r.category,
-  icon: r.icon,
-  color: r.color,
-  trackingType: r.tracking_type,
-  target: r.target,
-  unit: r.unit,
-  frequency: r.frequency,
-  daysOfWeek: parseJson<Weekday[]>(r.days_of_week, [0, 1, 2, 3, 4, 5, 6]),
-  intervalDays: r.interval_days,
-  startDate: r.start_date,
-  endDate: r.end_date,
-  suggestedTime: r.suggested_time,
-  reminderTimes: parseJson<string[]>(r.reminder_times, []),
-  notificationIds: parseJson<string[]>(r.notification_ids, []),
-  pauses: parseJson<PausePeriod[]>(r.pauses, []),
-  scheduleHistory: parseJson<HabitRule[]>(r.schedule_history, []),
-  archived: r.archived === 1,
-  sortOrder: r.sort_order,
-  createdAt: r.created_at,
-  updatedAt: r.updated_at,
-  deletedAt: r.deleted_at,
-});
-
 const toLog = (r: LogRow): HabitLog => ({
   id: r.id,
   habitId: r.habit_id,
   date: r.date,
-  value: r.count,
+  value: r.value,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   deletedAt: r.deleted_at,
@@ -142,277 +162,549 @@ const toSleep = (r: SleepRow): SleepLog => ({
   deletedAt: r.deleted_at,
 });
 
-type Sql = string | number | null;
-const json = (v: unknown) => JSON.stringify(v);
-const bool = (v: unknown) => (v ? 1 : 0);
-const same = (v: unknown) => v as Sql;
+const toSession = (r: SessionRow): TimedSession => ({
+  id: r.id,
+  kind: r.kind,
+  habitId: r.habit_id,
+  date: r.log_date,
+  startedAt: r.started_at,
+  runningSince: r.running_since,
+  accumulatedMs: r.accumulated_ms,
+  status: r.status,
+  endedAt: r.ended_at,
+  resultMinutes: r.result_minutes,
+});
 
-/** Campo del dominio → columna y serializador. */
-const HABIT_COLUMNS: Partial<Record<keyof Habit, [string, (v: unknown) => Sql]>> = {
-  name: ['name', same],
-  description: ['description', same],
-  category: ['category', same],
-  icon: ['icon', same],
-  color: ['color', same],
-  trackingType: ['tracking_type', same],
-  target: ['target', same],
-  unit: ['unit', same],
-  frequency: ['frequency', same],
-  daysOfWeek: ['days_of_week', json],
-  intervalDays: ['interval_days', same],
-  startDate: ['start_date', same],
-  endDate: ['end_date', same],
-  suggestedTime: ['suggested_time', same],
-  reminderTimes: ['reminder_times', json],
-  notificationIds: ['notification_ids', json],
-  pauses: ['pauses', json],
-  scheduleHistory: ['schedule_history', json],
-  archived: ['archived', bool],
-  sortOrder: ['sort_order', same],
-  deletedAt: ['deleted_at', same],
-};
+/** Claves de ajustes que viven en la tabla `alarms` y no en `user_settings`. */
+const ALARM_KEYS = new Set<keyof AppSettings>([
+  'bedtimeReminderEnabled',
+  'bedtimeReminderTime',
+  'bedtimeNotificationId',
+  'waterReminderEnabled',
+  'waterReminderStart',
+  'waterReminderEnd',
+  'waterReminderEveryMinutes',
+  'waterNotificationIds',
+]);
 
-export const sqliteRepositories: Repositories = {
-  habits: {
-    async list() {
-      const db = await getDb();
-      const rows = await db.getAllAsync<HabitRow>(
-        'SELECT * FROM habits WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC',
-      );
-      return rows.map(toHabit);
-    },
+export function createSqliteRepositories({ getDb, uuid, now = () => new Date().toISOString() }: SqliteDeps): Repositories {
+  // ---------- Ensamblado de hábitos (definición + tablas hijas) ----------
 
-    async create(input) {
-      const db = await getDb();
-      const max = await db.getFirstAsync<{ m: number | null }>('SELECT MAX(sort_order) AS m FROM habits');
-      const ts = now();
-      const habit: Habit = {
-        ...input,
-        id: uuid(),
-        notificationIds: [],
-        pauses: [],
-        scheduleHistory: [],
-        archived: false,
-        sortOrder: (max?.m ?? -1) + 1,
-        createdAt: ts,
-        updatedAt: ts,
-        deletedAt: null,
-      };
-      const entries = (Object.keys(HABIT_COLUMNS) as (keyof Habit)[]).map((k) => {
-        const [col, ser] = HABIT_COLUMNS[k]!;
-        return [col, ser(habit[k])] as const;
-      });
-      const cols = ['id', 'created_at', 'updated_at', ...entries.map((e) => e[0])];
-      const values: Sql[] = [habit.id, ts, ts, ...entries.map((e) => e[1])];
-      await db.runAsync(`INSERT INTO habits (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, ...values);
-      return habit;
-    },
-
-    async update(id, patch) {
-      const db = await getDb();
-      const sets: string[] = [];
-      const values: Sql[] = [];
-      for (const key of Object.keys(patch) as (keyof Habit)[]) {
-        const column = HABIT_COLUMNS[key];
-        if (!column) continue;
-        sets.push(`${column[0]} = ?`);
-        values.push(column[1](patch[key as keyof typeof patch]));
-      }
-      sets.push('updated_at = ?');
-      values.push(now());
-      await db.runAsync(`UPDATE habits SET ${sets.join(', ')} WHERE id = ?`, ...values, id);
-      const row = await db.getFirstAsync<HabitRow>('SELECT * FROM habits WHERE id = ?', id);
-      if (!row) throw new Error('Hábito no encontrado');
-      return toHabit(row);
-    },
-
-    async remove(id) {
-      const db = await getDb();
-      const ts = now();
-      await db.runAsync('UPDATE habits SET deleted_at = ?, updated_at = ?, notification_ids = ? WHERE id = ?', ts, ts, '[]', id);
-    },
-
-    async reorder(orderedIds) {
-      const db = await getDb();
-      const ts = now();
-      await db.withTransactionAsync(async () => {
-        for (let i = 0; i < orderedIds.length; i++) {
-          await db.runAsync('UPDATE habits SET sort_order = ?, updated_at = ? WHERE id = ?', i, ts, orderedIds[i]);
-        }
-      });
-    },
-  },
-
-  logs: {
-    async list() {
-      const db = await getDb();
-      const rows = await db.getAllAsync<LogRow>('SELECT * FROM habit_logs WHERE deleted_at IS NULL AND count > 0');
-      return rows.map(toLog);
-    },
-
-    async setValue(habitId, date, value) {
-      const db = await getDb();
-      const ts = now();
-      // Redondeo a 3 decimales para evitar arrastrar errores de coma flotante.
-      const safe = Math.max(0, Math.round(value * 1000) / 1000);
-      // Un registro por hábito y día. Un valor 0 se conserva como "desmarcado".
-      await db.runAsync(
-        `INSERT INTO habit_logs (id, habit_id, date, count, created_at, updated_at, deleted_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL)
-         ON CONFLICT (habit_id, date) DO UPDATE SET count = excluded.count, updated_at = excluded.updated_at, deleted_at = NULL`,
-        uuid(),
-        habitId,
-        date,
-        safe,
-        ts,
-        ts,
-      );
-      const row = await db.getFirstAsync<LogRow>('SELECT * FROM habit_logs WHERE habit_id = ? AND date = ?', habitId, date);
-      return toLog(row!);
-    },
-  },
-
-  water: {
-    async list() {
-      const db = await getDb();
-      const rows = await db.getAllAsync<WaterRow>('SELECT * FROM water_logs WHERE deleted_at IS NULL ORDER BY created_at ASC');
-      return rows.map(toWater);
-    },
-
-    async add(date, amountMl) {
-      const db = await getDb();
-      const ts = now();
-      const log: WaterLog = { id: uuid(), date, amountMl: Math.round(amountMl), createdAt: ts, updatedAt: ts, deletedAt: null };
-      await db.runAsync(
-        'INSERT INTO water_logs (id, date, amount_ml, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)',
-        log.id,
-        log.date,
-        log.amountMl,
-        ts,
-        ts,
-      );
-      return log;
-    },
-
-    async remove(id) {
-      const db = await getDb();
-      const ts = now();
-      await db.runAsync('UPDATE water_logs SET deleted_at = ?, updated_at = ? WHERE id = ?', ts, ts, id);
-    },
-  },
-
-  sleep: {
-    async list() {
-      const db = await getDb();
-      const rows = await db.getAllAsync<SleepRow>('SELECT * FROM sleep_logs WHERE deleted_at IS NULL ORDER BY date DESC');
-      return rows.map(toSleep);
-    },
-
-    async save(input, id) {
-      const db = await getDb();
-      const ts = now();
-      const duration = sleepDuration(input.bedtimeAt, input.wakeAt, input.latencyMinutes);
-      const values = [
-        input.date,
-        input.bedtimeAt,
-        input.wakeAt,
-        duration,
-        Math.max(0, Math.round(input.latencyMinutes)),
-        input.quality,
-        input.notes,
-        input.source,
-        input.externalId ?? null,
-      ];
-      let result!: SleepLog;
-      await db.withTransactionAsync(async () => {
-        // Una noche por fecha: si ya existe otra con esa fecha, se reemplaza.
-        const clash = await db.getFirstAsync<SleepRow>(
-          'SELECT * FROM sleep_logs WHERE date = ? AND deleted_at IS NULL AND id != ?',
-          input.date,
-          id ?? '',
-        );
-        if (clash) await db.runAsync('UPDATE sleep_logs SET deleted_at = ?, updated_at = ? WHERE id = ?', ts, ts, clash.id);
-
-        const existing = id ? await db.getFirstAsync<SleepRow>('SELECT * FROM sleep_logs WHERE id = ?', id) : null;
-        const finalId = existing?.id ?? uuid();
-        if (existing) {
-          await db.runAsync(
-            `UPDATE sleep_logs SET date = ?, bedtime_at = ?, wake_at = ?, duration_minutes = ?, latency_minutes = ?, quality = ?,
-               notes = ?, source = ?, external_id = ?, updated_at = ? WHERE id = ?`,
-            ...values,
-            ts,
-            finalId,
-          );
-        } else {
-          await db.runAsync(
-            `INSERT INTO sleep_logs (date, bedtime_at, wake_at, duration_minutes, latency_minutes, quality, notes, source, external_id,
-               id, created_at, updated_at, deleted_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-            ...values,
-            finalId,
-            ts,
-            ts,
-          );
-        }
-        const row = await db.getFirstAsync<SleepRow>('SELECT * FROM sleep_logs WHERE id = ?', finalId);
-        result = toSleep(row!);
-      });
-      return result;
-    },
-
-    async remove(id) {
-      const db = await getDb();
-      const ts = now();
-      await db.runAsync('UPDATE sleep_logs SET deleted_at = ?, updated_at = ? WHERE id = ?', ts, ts, id);
-    },
-  },
-
-  settings: {
-    async load() {
-      const db = await getDb();
-      const rows = await db.getAllAsync<{ key: string; value: string }>('SELECT key, value FROM settings');
-      const out: Record<string, unknown> = {};
-      for (const r of rows) out[r.key] = parseJson(r.value, undefined);
-      return out as Partial<AppSettings>;
-    },
-
-    async save(key, value) {
-      const db = await getDb();
-      await db.runAsync(
-        'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
-        key,
-        JSON.stringify(value),
-      );
-    },
-  },
-
-  async exportAll(): Promise<BackupPayload> {
-    const [habits, habitLogs, waterLogs, sleepLogs, settings] = await Promise.all([
-      this.habits.list(),
-      this.logs.list(),
-      this.water.list(),
-      this.sleep.list(),
-      this.settings.load(),
+  async function loadHabits(db: Db, where = 'h.deleted_at IS NULL', ...params: SqlValue[]): Promise<Habit[]> {
+    const rows = await db.getAllAsync<HabitRow>(`SELECT h.* FROM habits h WHERE ${where} ORDER BY h.sort_order, h.created_at`, ...params);
+    if (rows.length === 0) return [];
+    const ids = rows.map((r) => r.id);
+    const inList = ids.map(() => '?').join(',');
+    const [schedules, pauses, alarms, notifications] = await Promise.all([
+      db.getAllAsync<ScheduleRow>(`SELECT * FROM habit_schedules WHERE habit_id IN (${inList}) ORDER BY valid_from`, ...ids),
+      db.getAllAsync<PauseRow>(`SELECT * FROM habit_pauses WHERE habit_id IN (${inList}) ORDER BY start_date`, ...ids),
+      db.getAllAsync<AlarmRow>(`SELECT * FROM alarms WHERE kind = 'habit' AND habit_id IN (${inList}) ORDER BY time`, ...ids),
+      db.getAllAsync<{ notification_id: string; habit_id: string }>(
+        `SELECT n.notification_id, a.habit_id FROM scheduled_notifications n JOIN alarms a ON a.id = n.alarm_id
+         WHERE a.kind = 'habit' AND a.habit_id IN (${inList}) ORDER BY n.created_at, n.notification_id`,
+        ...ids,
+      ),
     ]);
-    return {
-      app: 'rutiva',
-      version: 3,
-      exportedAt: now(),
-      habits: habits.map((h) => ({ ...h, notificationIds: [] })),
-      habitLogs,
-      waterLogs,
-      sleepLogs,
-      // Los ids de notificaciones y el cronómetro son propios de este dispositivo.
-      settings: { ...settings, bedtimeNotificationId: null, waterNotificationIds: [], activeTimer: null, sleepSession: null },
+    const by = <T extends { habit_id: string | null }>(list: T[]) => {
+      const m = new Map<string, T[]>();
+      for (const x of list) if (x.habit_id) (m.get(x.habit_id) ?? m.set(x.habit_id, []).get(x.habit_id)!).push(x);
+      return m;
     };
-  },
+    const sByHabit = by(schedules);
+    const pByHabit = by(pauses);
+    const aByHabit = by(alarms);
+    const nByHabit = by(notifications);
 
-  async resetAll() {
-    const db = await getDb();
-    await db.withTransactionAsync(async () => {
-      await db.execAsync(
-        'DELETE FROM habit_logs; DELETE FROM habits; DELETE FROM water_logs; DELETE FROM sleep_logs; DELETE FROM settings;',
-      );
+    return rows.map((r) => {
+      const sch = sByHabit.get(r.id) ?? [];
+      const current = sch.find((s) => s.valid_until === null) ?? sch[sch.length - 1];
+      const history: HabitRule[] = sch
+        .filter((s) => s.valid_until !== null && s !== current)
+        .map((s) => ({ until: s.valid_until!, frequency: s.frequency, daysOfWeek: maskToDays(s.days_mask), intervalDays: s.interval_days, target: s.target }));
+      return {
+        id: r.id,
+        name: r.name,
+        description: r.description,
+        category: r.category_id,
+        icon: r.icon,
+        color: r.color,
+        trackingType: r.tracking_type,
+        target: current?.target ?? 1,
+        unit: r.unit,
+        frequency: current?.frequency ?? 'daily',
+        daysOfWeek: current ? maskToDays(current.days_mask) : [0, 1, 2, 3, 4, 5, 6],
+        intervalDays: current?.interval_days ?? 1,
+        startDate: r.start_date,
+        endDate: r.end_date,
+        suggestedTime: r.suggested_time,
+        reminderTimes: (aByHabit.get(r.id) ?? []).filter((a) => a.enabled).map((a) => a.time!),
+        notificationIds: (nByHabit.get(r.id) ?? []).map((n) => n.notification_id),
+        pauses: (pByHabit.get(r.id) ?? []).map(
+          (p): PausePeriod => (p.reason === 'archive' ? { from: p.start_date, to: p.end_date, reason: 'archive' } : { from: p.start_date, to: p.end_date }),
+        ),
+        scheduleHistory: history,
+        archived: r.archived === 1,
+        sortOrder: r.sort_order,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        deletedAt: r.deleted_at,
+      };
     });
-  },
-};
+  }
+
+  async function loadHabit(db: Db, id: string): Promise<Habit> {
+    const [habit] = await loadHabits(db, 'h.id = ?', id);
+    if (!habit) throw new Error('Hábito no encontrado');
+    return habit;
+  }
+
+  async function writeSchedules(db: Db, h: Habit, ts: string) {
+    await db.runAsync('DELETE FROM habit_schedules WHERE habit_id = ?', h.id);
+    for (const r of scheduleRows(h.id, h.startDate, h, h.scheduleHistory)) {
+      await db.runAsync(
+        `INSERT INTO habit_schedules (id, habit_id, valid_from, valid_until, frequency, days_mask, interval_days, target, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        uuid(), h.id, r.validFrom, r.validUntil, r.frequency, r.mask, r.interval, r.target, ts,
+      );
+    }
+  }
+
+  async function writePauses(db: Db, h: Habit, ts: string) {
+    await db.runAsync('DELETE FROM habit_pauses WHERE habit_id = ?', h.id);
+    for (const p of h.pauses) {
+      await db.runAsync(
+        'INSERT INTO habit_pauses (id, habit_id, start_date, end_date, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        uuid(), h.id, p.from, p.to, p.reason === 'archive' ? 'archive' : 'pause', ts,
+      );
+    }
+  }
+
+  /** Sincroniza las alarmas por hora: conserva las que siguen (y sus avisos), borra las quitadas. */
+  async function writeAlarms(db: Db, h: Habit, ts: string) {
+    const existing = await db.getAllAsync<AlarmRow>(`SELECT * FROM alarms WHERE kind = 'habit' AND habit_id = ?`, h.id);
+    const wanted = new Set(h.reminderTimes);
+    for (const a of existing) if (!wanted.has(a.time!)) await db.runAsync('DELETE FROM alarms WHERE id = ?', a.id);
+    const have = new Set(existing.map((a) => a.time));
+    for (const time of wanted) {
+      if (have.has(time)) continue;
+      await db.runAsync(
+        `INSERT INTO alarms (id, kind, habit_id, time, enabled, created_at, updated_at) VALUES (?, 'habit', ?, ?, 1, ?, ?)`,
+        uuid(), h.id, time, ts, ts,
+      );
+    }
+  }
+
+  const SCALARS: Partial<Record<keyof Habit, [string, (v: unknown) => SqlValue]>> = {
+    name: ['name', (v) => v as string],
+    description: ['description', (v) => v as string | null],
+    category: ['category_id', (v) => v as string],
+    icon: ['icon', (v) => v as string],
+    color: ['color', (v) => v as string],
+    trackingType: ['tracking_type', (v) => v as string],
+    unit: ['unit', (v) => v as string | null],
+    startDate: ['start_date', (v) => v as string],
+    endDate: ['end_date', (v) => v as string | null],
+    suggestedTime: ['suggested_time', (v) => v as string | null],
+    archived: ['archived', (v) => (v ? 1 : 0)],
+    sortOrder: ['sort_order', (v) => v as number],
+    deletedAt: ['deleted_at', (v) => v as string | null],
+  };
+  const SCHEDULE_KEYS: (keyof Habit)[] = ['frequency', 'daysOfWeek', 'intervalDays', 'target', 'scheduleHistory', 'startDate'];
+
+  // ---------- Alarmas únicas (agua y hora de dormir) ----------
+
+  async function singleton(db: Db, kind: 'water' | 'bedtime'): Promise<AlarmRow> {
+    const row = await db.getFirstAsync<AlarmRow>('SELECT * FROM alarms WHERE id = ?', kind);
+    if (row) return row;
+    const ts = now();
+    if (kind === 'bedtime') {
+      await db.runAsync(`INSERT INTO alarms (id, kind, time, enabled, created_at, updated_at) VALUES ('bedtime', 'bedtime', '22:30', 0, ?, ?)`, ts, ts);
+    } else {
+      await db.runAsync(
+        `INSERT INTO alarms (id, kind, window_start, window_end, every_minutes, enabled, created_at, updated_at)
+         VALUES ('water', 'water', '09:00', '21:00', 120, 0, ?, ?)`,
+        ts,
+        ts,
+      );
+    }
+    return (await db.getFirstAsync<AlarmRow>('SELECT * FROM alarms WHERE id = ?', kind))!;
+  }
+
+  async function replaceNotifications(db: Db, alarmId: string, ids: string[]) {
+    await db.runAsync('DELETE FROM scheduled_notifications WHERE alarm_id = ?', alarmId);
+    const ts = now();
+    for (const id of ids) {
+      await db.runAsync('INSERT OR REPLACE INTO scheduled_notifications (notification_id, alarm_id, created_at) VALUES (?, ?, ?)', id, alarmId, ts);
+    }
+  }
+
+  async function notificationIds(db: Db, alarmId: string) {
+    const rows = await db.getAllAsync<{ notification_id: string }>(
+      'SELECT notification_id FROM scheduled_notifications WHERE alarm_id = ? ORDER BY created_at, notification_id',
+      alarmId,
+    );
+    return rows.map((r) => r.notification_id);
+  }
+
+  const repos: Repositories = {
+    habits: {
+      async list() {
+        return loadHabits(await getDb());
+      },
+
+      async create(input) {
+        const db = await getDb();
+        const ts = now();
+        const max = await db.getFirstAsync<{ m: number | null }>('SELECT MAX(sort_order) AS m FROM habits');
+        const habit: Habit = {
+          ...input,
+          id: uuid(),
+          notificationIds: [],
+          pauses: [],
+          scheduleHistory: [],
+          archived: false,
+          sortOrder: (max?.m ?? -1) + 1,
+          createdAt: ts,
+          updatedAt: ts,
+          deletedAt: null,
+        };
+        await db.withTransactionAsync(async () => {
+          await db.runAsync(
+            `INSERT INTO habits (id, name, description, category_id, icon, color, tracking_type, unit, start_date, end_date,
+               suggested_time, archived, sort_order, created_at, updated_at, deleted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL)`,
+            habit.id, habit.name, habit.description, habit.category, habit.icon, habit.color, habit.trackingType, habit.unit,
+            habit.startDate, habit.endDate, habit.suggestedTime, habit.sortOrder, ts, ts,
+          );
+          await writeSchedules(db, habit, ts);
+          await writeAlarms(db, habit, ts);
+        });
+        return loadHabit(db, habit.id);
+      },
+
+      async update(id, patch) {
+        const db = await getDb();
+        const ts = now();
+        await db.withTransactionAsync(async () => {
+          const current = await loadHabit(db, id);
+          const next: Habit = { ...current, ...patch };
+          const sets: string[] = [];
+          const values: SqlValue[] = [];
+          for (const key of Object.keys(patch) as (keyof Habit)[]) {
+            const col = SCALARS[key];
+            if (!col) continue;
+            sets.push(`${col[0]} = ?`);
+            values.push(col[1](next[key]));
+          }
+          sets.push('updated_at = ?');
+          values.push(ts);
+          await db.runAsync(`UPDATE habits SET ${sets.join(', ')} WHERE id = ?`, ...values, id);
+          if (SCHEDULE_KEYS.some((k) => k in patch)) await writeSchedules(db, next, ts);
+          if ('pauses' in patch) await writePauses(db, next, ts);
+          if ('reminderTimes' in patch) await writeAlarms(db, next, ts);
+        });
+        return loadHabit(db, id);
+      },
+
+      async setReminderNotifications(habitId, byTime) {
+        const db = await getDb();
+        await db.withTransactionAsync(async () => {
+          const alarms = await db.getAllAsync<AlarmRow>(`SELECT * FROM alarms WHERE kind = 'habit' AND habit_id = ?`, habitId);
+          for (const a of alarms) await replaceNotifications(db, a.id, byTime[a.time!] ?? []);
+        });
+        return loadHabit(db, habitId);
+      },
+
+      async remove(id) {
+        const db = await getDb();
+        const ts = now();
+        await db.withTransactionAsync(async () => {
+          await db.runAsync('UPDATE habits SET deleted_at = ?, updated_at = ? WHERE id = ?', ts, ts, id);
+          // Sus avisos ya se cancelaron en el dispositivo.
+          await db.runAsync(
+            `DELETE FROM scheduled_notifications WHERE alarm_id IN (SELECT id FROM alarms WHERE kind = 'habit' AND habit_id = ?)`,
+            id,
+          );
+        });
+      },
+
+      async restore(id) {
+        const db = await getDb();
+        await db.runAsync('UPDATE habits SET deleted_at = NULL, updated_at = ? WHERE id = ?', now(), id);
+        return loadHabit(db, id);
+      },
+
+      async reorder(orderedIds) {
+        const db = await getDb();
+        const ts = now();
+        await db.withTransactionAsync(async () => {
+          for (let i = 0; i < orderedIds.length; i++) {
+            await db.runAsync('UPDATE habits SET sort_order = ?, updated_at = ? WHERE id = ?', i, ts, orderedIds[i]);
+          }
+        });
+      },
+    },
+
+    logs: {
+      async list() {
+        const db = await getDb();
+        const rows = await db.getAllAsync<LogRow>(
+          `SELECT l.* FROM habit_logs l JOIN habits h ON h.id = l.habit_id
+           WHERE l.deleted_at IS NULL AND l.value > 0 AND h.deleted_at IS NULL`,
+        );
+        return rows.map(toLog);
+      },
+
+      async setValue(habitId, date, value) {
+        const db = await getDb();
+        const ts = now();
+        // Redondeo a 3 decimales para no arrastrar errores de coma flotante.
+        const safe = Math.max(0, Math.round(value * 1000) / 1000);
+        await db.runAsync(
+          `INSERT INTO habit_logs (id, habit_id, date, value, created_at, updated_at, deleted_at)
+           VALUES (?, ?, ?, ?, ?, ?, NULL)
+           ON CONFLICT (habit_id, date) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, deleted_at = NULL`,
+          uuid(), habitId, date, safe, ts, ts,
+        );
+        const row = await db.getFirstAsync<LogRow>('SELECT * FROM habit_logs WHERE habit_id = ? AND date = ?', habitId, date);
+        return toLog(row!);
+      },
+    },
+
+    water: {
+      async list() {
+        const db = await getDb();
+        const rows = await db.getAllAsync<WaterRow>('SELECT * FROM water_logs WHERE deleted_at IS NULL ORDER BY created_at, id');
+        return rows.map(toWater);
+      },
+      async add(date, amountMl) {
+        const db = await getDb();
+        const ts = now();
+        const log: WaterLog = { id: uuid(), date, amountMl: Math.round(amountMl), createdAt: ts, updatedAt: ts, deletedAt: null };
+        await db.runAsync(
+          'INSERT INTO water_logs (id, date, amount_ml, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)',
+          log.id, log.date, log.amountMl, ts, ts,
+        );
+        return log;
+      },
+      async remove(id) {
+        const db = await getDb();
+        const ts = now();
+        await db.runAsync('UPDATE water_logs SET deleted_at = ?, updated_at = ? WHERE id = ?', ts, ts, id);
+      },
+      async restore(id) {
+        const db = await getDb();
+        await db.runAsync('UPDATE water_logs SET deleted_at = NULL, updated_at = ? WHERE id = ?', now(), id);
+        return toWater((await db.getFirstAsync<WaterRow>('SELECT * FROM water_logs WHERE id = ?', id))!);
+      },
+    },
+
+    sleep: {
+      async list() {
+        const db = await getDb();
+        const rows = await db.getAllAsync<SleepRow>('SELECT * FROM sleep_logs WHERE deleted_at IS NULL ORDER BY date DESC');
+        return rows.map(toSleep);
+      },
+
+      async save(input, id, sessionId = null) {
+        const db = await getDb();
+        const ts = now();
+        const duration = sleepDuration(input.bedtimeAt, input.wakeAt, input.latencyMinutes);
+        const values: SqlValue[] = [
+          input.date,
+          input.bedtimeAt,
+          input.wakeAt,
+          duration,
+          Math.max(0, Math.round(input.latencyMinutes)),
+          input.quality,
+          input.notes,
+          input.source,
+          input.externalId ?? null,
+        ];
+        let result!: SleepLog;
+        await db.withTransactionAsync(async () => {
+          // Una noche por fecha (índice único parcial): la anterior se reemplaza.
+          const clash = await db.getFirstAsync<SleepRow>(
+            'SELECT * FROM sleep_logs WHERE date = ? AND deleted_at IS NULL AND id != ?',
+            input.date,
+            id ?? '',
+          );
+          if (clash) await db.runAsync('UPDATE sleep_logs SET deleted_at = ?, updated_at = ? WHERE id = ?', ts, ts, clash.id);
+          const existing = id ? await db.getFirstAsync<SleepRow>('SELECT * FROM sleep_logs WHERE id = ?', id) : null;
+          const finalId = existing?.id ?? uuid();
+          if (existing) {
+            await db.runAsync(
+              `UPDATE sleep_logs SET date = ?, bedtime_at = ?, wake_at = ?, duration_minutes = ?, latency_minutes = ?, quality = ?,
+                 notes = ?, source = ?, external_id = ?, updated_at = ?, deleted_at = NULL WHERE id = ?`,
+              ...values, ts, finalId,
+            );
+          } else {
+            await db.runAsync(
+              `INSERT INTO sleep_logs (date, bedtime_at, wake_at, duration_minutes, latency_minutes, quality, notes, source, external_id,
+                 id, session_id, created_at, updated_at, deleted_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+              ...values, finalId, sessionId, ts, ts,
+            );
+          }
+          result = toSleep((await db.getFirstAsync<SleepRow>('SELECT * FROM sleep_logs WHERE id = ?', finalId))!);
+        });
+        return result;
+      },
+
+      async remove(id) {
+        const db = await getDb();
+        const ts = now();
+        await db.runAsync('UPDATE sleep_logs SET deleted_at = ?, updated_at = ? WHERE id = ?', ts, ts, id);
+      },
+
+      async restore(id) {
+        const db = await getDb();
+        const ts = now();
+        let result!: SleepLog;
+        await db.withTransactionAsync(async () => {
+          const row = (await db.getFirstAsync<SleepRow>('SELECT * FROM sleep_logs WHERE id = ?', id))!;
+          // Si mientras tanto se registró otra noche ese día, gana la restaurada.
+          await db.runAsync('UPDATE sleep_logs SET deleted_at = ?, updated_at = ? WHERE date = ? AND id != ? AND deleted_at IS NULL', ts, ts, row.date, id);
+          await db.runAsync('UPDATE sleep_logs SET deleted_at = NULL, updated_at = ? WHERE id = ?', ts, id);
+          result = toSleep((await db.getFirstAsync<SleepRow>('SELECT * FROM sleep_logs WHERE id = ?', id))!);
+        });
+        return result;
+      },
+    },
+
+    sessions: {
+      async active(kind) {
+        const db = await getDb();
+        const row = await db.getFirstAsync<SessionRow>(`SELECT * FROM timed_sessions WHERE kind = ? AND status IN ('running', 'paused')`, kind);
+        return row ? toSession(row) : null;
+      },
+      async start(kind, startedAt, habitId, date) {
+        const db = await getDb();
+        const ts = now();
+        const id = uuid();
+        await db.runAsync(
+          `INSERT INTO timed_sessions (id, kind, habit_id, log_date, started_at, running_since, accumulated_ms, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 0, 'running', ?, ?)`,
+          id, kind, habitId ?? null, date ?? null, startedAt, startedAt, ts, ts,
+        );
+        return toSession((await db.getFirstAsync<SessionRow>('SELECT * FROM timed_sessions WHERE id = ?', id))!);
+      },
+      async save(s) {
+        const db = await getDb();
+        await db.runAsync(
+          `UPDATE timed_sessions SET running_since = ?, accumulated_ms = ?, status = ?, ended_at = ?, result_minutes = ?, updated_at = ? WHERE id = ?`,
+          s.runningSince, Math.round(s.accumulatedMs), s.status, s.endedAt, s.resultMinutes, now(), s.id,
+        );
+        return toSession((await db.getFirstAsync<SessionRow>('SELECT * FROM timed_sessions WHERE id = ?', s.id))!);
+      },
+      async history(kind, limit = 50) {
+        const db = await getDb();
+        const rows = await db.getAllAsync<SessionRow>('SELECT * FROM timed_sessions WHERE kind = ? ORDER BY started_at DESC LIMIT ?', kind, limit);
+        return rows.map(toSession);
+      },
+    },
+
+    settings: {
+      async load() {
+        const db = await getDb();
+        const rows = await db.getAllAsync<{ key: string; value: string }>('SELECT key, value FROM user_settings');
+        const out: Record<string, unknown> = {};
+        for (const r of rows) if (!ALARM_KEYS.has(r.key as keyof AppSettings)) out[r.key] = parseJson(r.value, undefined);
+        const bedtime = await singleton(db, 'bedtime');
+        const water = await singleton(db, 'water');
+        const [bedtimeIds, waterIds] = await Promise.all([notificationIds(db, 'bedtime'), notificationIds(db, 'water')]);
+        return {
+          ...(out as Partial<AppSettings>),
+          bedtimeReminderEnabled: bedtime.enabled === 1,
+          bedtimeReminderTime: bedtime.time!,
+          bedtimeNotificationId: bedtimeIds[0] ?? null,
+          waterReminderEnabled: water.enabled === 1,
+          waterReminderStart: water.window_start!,
+          waterReminderEnd: water.window_end!,
+          waterReminderEveryMinutes: water.every_minutes!,
+          waterNotificationIds: waterIds,
+        };
+      },
+
+      async save(key, value) {
+        const db = await getDb();
+        if (!ALARM_KEYS.has(key)) {
+          await db.runAsync(
+            'INSERT INTO user_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
+            key,
+            JSON.stringify(value),
+          );
+          return;
+        }
+        // Ajustes de recordatorios: viven en la tabla de alarmas.
+        const ts = now();
+        const isWater = key.startsWith('water');
+        await singleton(db, isWater ? 'water' : 'bedtime');
+        const alarmId = isWater ? 'water' : 'bedtime';
+        const set = (col: string, v: SqlValue) => db.runAsync(`UPDATE alarms SET ${col} = ?, updated_at = ? WHERE id = ?`, v, ts, alarmId);
+        switch (key) {
+          case 'bedtimeReminderEnabled':
+          case 'waterReminderEnabled':
+            return void (await set('enabled', value ? 1 : 0));
+          case 'bedtimeReminderTime':
+            return void (await set('time', value as string));
+          case 'waterReminderStart':
+            return void (await set('window_start', value as string));
+          case 'waterReminderEnd':
+            return void (await set('window_end', value as string));
+          case 'waterReminderEveryMinutes':
+            return void (await set('every_minutes', Math.max(15, value as number)));
+          case 'bedtimeNotificationId':
+            return replaceNotifications(db, 'bedtime', value ? [value as string] : []);
+          case 'waterNotificationIds':
+            return replaceNotifications(db, 'water', value as string[]);
+        }
+      },
+    },
+
+    async exportAll(): Promise<BackupPayload> {
+      const db = await getDb();
+      const [habits, habitLogs, waterLogs, sleepLogs, settings, sessionRows] = await Promise.all([
+        repos.habits.list(),
+        repos.logs.list(),
+        repos.water.list(),
+        repos.sleep.list(),
+        repos.settings.load(),
+        db.getAllAsync<SessionRow>('SELECT * FROM timed_sessions ORDER BY started_at'),
+      ]);
+      return {
+        app: 'rutiva',
+        version: 4,
+        exportedAt: now(),
+        habits: habits.map((h) => ({ ...h, notificationIds: [] })),
+        habitLogs,
+        waterLogs,
+        sleepLogs,
+        timedSessions: sessionRows.map(toSession),
+        // Los ids de notificaciones son propios de este dispositivo.
+        settings: { ...settings, bedtimeNotificationId: null, waterNotificationIds: [] },
+      };
+    },
+
+    async resetAll() {
+      const db = await getDb();
+      await db.withTransactionAsync(async () => {
+        await db.execAsync(`
+          DELETE FROM scheduled_notifications;
+          UPDATE sleep_logs SET session_id = NULL;
+          DELETE FROM timed_sessions;
+          DELETE FROM alarms;
+          DELETE FROM habit_logs;
+          DELETE FROM habit_schedules;
+          DELETE FROM habit_pauses;
+          DELETE FROM habits;
+          DELETE FROM water_logs;
+          DELETE FROM sleep_logs;
+          DELETE FROM user_settings;
+        `);
+      });
+    },
+  };
+  return repos;
+}
+

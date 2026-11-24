@@ -1,42 +1,66 @@
-import type { ActiveTimer, DateKey } from '@/domain/types';
-import { useSettingsStore } from '@/features/settings/store/useSettingsStore';
-import { useHabitStore } from '@/features/habits/store/useHabitStore';
+import { create } from 'zustand';
+import { repositories } from '@/data/repositories';
+import { discardSession, finishSession, pauseSession, resumeSession } from '@/domain/timer';
+import type { DateKey, TimedSession } from '@/domain/types';
+import { useHabitStore } from './useHabitStore';
 
 /**
- * Cronómetro para hábitos por duración. Solo puede haber uno activo; se guarda
- * en ajustes para que siga contando aunque se cierre la app.
+ * Cronómetro de hábitos por duración. Solo puede haber uno activo (índice
+ * único en `timed_sessions`). El estado vive en SQLite, así que sobrevive a
+ * cerrar la app, y las sesiones terminadas quedan como historial.
  */
-export function elapsedMs(timer: ActiveTimer, now = Date.now()): number {
-  return timer.accumulatedMs + (timer.runningSince ? now - new Date(timer.runningSince).getTime() : 0);
+interface TimerState {
+  session: TimedSession | null;
+  load: () => Promise<void>;
+  start: (habitId: string, date: DateKey) => Promise<void>;
+  pause: () => Promise<void>;
+  resume: () => Promise<void>;
+  /** Detiene y suma los minutos al día en que empezó. Devuelve los minutos añadidos. */
+  finish: () => Promise<number>;
+  discard: () => Promise<void>;
 }
 
-const save = (timer: ActiveTimer | null) => useSettingsStore.getState().update('activeTimer', timer);
-const current = () => useSettingsStore.getState().settings.activeTimer;
+export const useTimerStore = create<TimerState>((set, get) => {
+  async function persist(next: TimedSession) {
+    const saved = await repositories.sessions.save(next);
+    set({ session: saved.status === 'running' || saved.status === 'paused' ? saved : null });
+    return saved;
+  }
 
-export const timer = {
-  start(habitId: string, date: DateKey) {
-    return save({ habitId, date, runningSince: new Date().toISOString(), accumulatedMs: 0 });
-  },
-  pause() {
-    const t = current();
-    if (!t?.runningSince) return;
-    return save({ ...t, runningSince: null, accumulatedMs: elapsedMs(t) });
-  },
-  resume() {
-    const t = current();
-    if (!t || t.runningSince) return;
-    return save({ ...t, runningSince: new Date().toISOString() });
-  },
-  discard() {
-    return save(null);
-  },
-  /** Detiene el cronómetro y suma los minutos al día en que se inició. Devuelve los minutos añadidos. */
-  async finish(): Promise<number> {
-    const t = current();
-    if (!t) return 0;
-    const minutes = Math.round(elapsedMs(t) / 60000);
-    await save(null);
-    if (minutes > 0) await useHabitStore.getState().addProgress(t.habitId, t.date, minutes);
-    return minutes;
-  },
-};
+  return {
+    session: null,
+
+    async load() {
+      set({ session: await repositories.sessions.active('habit') });
+    },
+
+    async start(habitId, date) {
+      if (get().session) throw new Error('Ya hay un cronómetro en marcha.');
+      set({ session: await repositories.sessions.start('habit', new Date().toISOString(), habitId, date) });
+    },
+
+    async pause() {
+      const s = get().session;
+      if (s) await persist(pauseSession(s, Date.now()));
+    },
+
+    async resume() {
+      const s = get().session;
+      if (s) await persist(resumeSession(s, Date.now()));
+    },
+
+    async finish() {
+      const s = get().session;
+      if (!s) return 0;
+      const done = await persist(finishSession(s, Date.now()));
+      const minutes = done.resultMinutes ?? 0;
+      if (minutes > 0 && done.habitId && done.date) await useHabitStore.getState().addProgress(done.habitId, done.date, minutes);
+      return minutes;
+    },
+
+    async discard() {
+      const s = get().session;
+      if (s) await persist(discardSession(s, Date.now()));
+    },
+  };
+});

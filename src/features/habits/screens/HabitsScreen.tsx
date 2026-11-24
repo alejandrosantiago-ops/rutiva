@@ -8,7 +8,8 @@ import { useLogIndex } from '@/features/habits/hooks/useLogIndex';
 import { useHabitStore } from '@/features/habits/store/useHabitStore';
 import { useToday } from '@/hooks/useToday';
 import { Screen } from '@/ui/layout';
-import { Button, EmptyState, IconButton, Txt } from '@/ui/primitives';
+import { Fab } from '@/ui/fab';
+import { Button, EmptyState, Txt } from '@/ui/primitives';
 import { Segmented } from '@/ui/form';
 import { HabitCard } from '@/features/habits/components/HabitCard';
 
@@ -27,7 +28,7 @@ export default function HabitsScreen() {
     <Screen
       subtitle={`${activeCount} ${activeCount === 1 ? 'hábito activo' : 'hábitos activos'}`}
       title="Hábitos"
-      right={<IconButton icon={Plus} tone="brand" label="Nuevo hábito" onPress={() => router.push('/habit/new')} />}
+      fab={<Fab icon={Plus} label="Nuevo hábito" onPress={() => router.push('/habit/new')} />}
     >
       <View className="mb-5 mt-4">
         <Segmented<Filter>

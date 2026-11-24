@@ -21,7 +21,8 @@ import { formatDurationShort, formatEs, formatIsoTime, minutesToTime, shiftKey }
 import { compareWithGoal, logsInRange, QUALITY_LABELS, SOURCE_LABELS, sleepSeries, summarizeSleep } from '@/domain/sleep';
 import { useSleepStore } from '@/features/sleep/store/useSleepStore';
 import { useSettingsStore } from '@/features/settings/store/useSettingsStore';
-import { sleepSession } from '@/features/sleep/store/sleepSession';
+import { useSleepSessionStore } from '@/features/sleep/store/sleepSession';
+import { toast } from '@/ui/toast';
 import { syncBedtimeReminder } from '@/features/sleep/store/bedtimeReminder';
 import { useToday } from '@/hooks/useToday';
 import { useTheme } from '@/theme/colors';
@@ -57,7 +58,8 @@ function signed(min: number) {
 /** Tarjeta del temporizador: "Voy a dormir" / "Me desperté". */
 function SleepTimerCard() {
   const t = useTheme();
-  const session = useSettingsStore((s) => s.settings.sleepSession);
+  const session = useSleepSessionStore((s) => s.session);
+  const { start, discard } = useSleepSessionStore.getState();
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -84,7 +86,9 @@ function SleepTimerCard() {
           onPress={() => {
             haptics.success();
             setNow(Date.now());
-            sleepSession.start();
+            start()
+              .then(() => toast('Que descanses. Pulsa «Me desperté» al levantarte.'))
+              .catch(() => toast('No se pudo iniciar la sesión', { tone: 'error' }));
           }}
         />
       </Card>
@@ -117,7 +121,7 @@ function SleepTimerCard() {
           icon={X}
           label="Cancelar sesión"
           size={56}
-          onPress={() => confirmAction('Cancelar sesión', 'Se descartará la sesión sin guardar ningún registro.', 'Descartar', () => sleepSession.clear())}
+          onPress={() => confirmAction('Cancelar sesión', 'Se descartará la sesión sin guardar ningún registro.', 'Descartar', () => discard())}
         />
       </View>
     </View>

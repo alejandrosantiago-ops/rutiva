@@ -1,10 +1,12 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { palette } from '@/theme/palette';
-import { fromKey, shiftKey, timeToMinutes, todayKey } from '@/domain/dates';
-import { describeTarget, isPaused, isScheduledOn } from '@/domain/habits';
+import { timeToMinutes } from '@/domain/dates';
+import { describeTarget } from '@/domain/habits';
+import { planHabitReminders } from '@/domain/reminders';
 import { waterReminderSlots } from '@/domain/water';
 import type { Habit, TimeOfDay } from '@/domain/types';
+import { applyReminderPlan, type NotificationGateway } from './sync';
 
 const CHANNEL_ID = 'recordatorios';
 export const notificationsSupported = Platform.OS !== 'web';
@@ -66,71 +68,44 @@ const HABIT_MESSAGES = [
   'Tu yo de mañana te lo agradecerá.',
 ];
 
-/** Días por delante que se programan cuando no basta con un aviso repetitivo. */
-const ROLLING_DAYS = 14;
-/** iOS admite como máximo 64 notificaciones pendientes por app. */
-const MAX_PER_HABIT = 24;
+/** Pasarela real hacia expo-notifications (en las pruebas se usa una falsa). */
+export const expoGateway: NotificationGateway = {
+  async schedule(content, trigger) {
+    const T = Notifications.SchedulableTriggerInputTypes;
+    const input: Notifications.NotificationTriggerInput =
+      trigger.type === 'daily'
+        ? { type: T.DAILY, hour: trigger.hour, minute: trigger.minute, channelId: CHANNEL_ID }
+        : trigger.type === 'weekly'
+          ? { type: T.WEEKLY, weekday: trigger.weekday, hour: trigger.hour, minute: trigger.minute, channelId: CHANNEL_ID }
+          : { type: T.DATE, date: trigger.at, channelId: CHANNEL_ID };
+    return Notifications.scheduleNotificationAsync({ content: { ...content, sound: 'default' }, trigger: input });
+  },
+  async cancel(id) {
+    await Notifications.cancelScheduledNotificationAsync(id);
+  },
+};
 
 /**
- * Cancela los recordatorios previos del hábito y programa los nuevos.
- * - Diario o días concretos sin fecha de fin → avisos repetitivos (DAILY/WEEKLY).
- * - Intervalos o con fecha de fin → avisos por fecha para los próximos 14 días;
- *   se renuevan cada vez que se abre la app (ver useBootstrap).
- * Devuelve los ids programados (vacío si no aplica o no hay permiso).
+ * Cancela los avisos anteriores del hábito (`previousIds`) y programa los del
+ * plan actual. Devuelve los ids nuevos agrupados por hora de recordatorio.
  */
-export async function scheduleHabitReminders(habit: Habit, enabledGlobally: boolean): Promise<string[]> {
-  await cancelNotifications(habit.notificationIds);
-  if (!notificationsSupported || !enabledGlobally) return [];
-  if (habit.reminderTimes.length === 0 || habit.archived || habit.deletedAt || isPaused(habit)) return [];
-  if (!(await ensurePermission())) return [];
-
-  const content: Notifications.NotificationContentInput = {
+export async function scheduleHabitReminders(
+  habit: Habit,
+  previousIds: string[],
+  enabledGlobally: boolean,
+): Promise<Record<TimeOfDay, string[]>> {
+  if (!notificationsSupported) return {};
+  const plan = planHabitReminders(habit, new Date(), enabledGlobally);
+  if (plan.length > 0 && !(await ensurePermission())) {
+    await cancelNotifications(previousIds);
+    return {};
+  }
+  const message = HABIT_MESSAGES[Math.floor(Math.random() * HABIT_MESSAGES.length)];
+  return applyReminderPlan(expoGateway, previousIds, plan, {
     title: habit.name,
-    body:
-      habit.trackingType === 'check'
-        ? HABIT_MESSAGES[Math.floor(Math.random() * HABIT_MESSAGES.length)]
-        : `Meta de hoy: ${describeTarget(habit)}. ${HABIT_MESSAGES[Math.floor(Math.random() * HABIT_MESSAGES.length)]}`,
+    body: habit.trackingType === 'check' ? message : `Meta de hoy: ${describeTarget(habit)}. ${message}`,
     data: { url: `/habit/${habit.id}`, habitId: habit.id },
-    sound: 'default',
-  };
-  const T = Notifications.SchedulableTriggerInputTypes;
-  const ids: string[] = [];
-
-  const repeating = !habit.endDate && (habit.frequency === 'daily' || habit.frequency === 'weekly');
-  if (repeating) {
-    for (const time of habit.reminderTimes) {
-      const { hour, minute } = splitTime(time);
-      if (habit.frequency === 'daily' || habit.daysOfWeek.length === 7) {
-        ids.push(await Notifications.scheduleNotificationAsync({ content, trigger: { type: T.DAILY, hour, minute, channelId: CHANNEL_ID } }));
-      } else {
-        for (const day of habit.daysOfWeek) {
-          // WEEKLY usa 1 = domingo … 7 = sábado.
-          ids.push(
-            await Notifications.scheduleNotificationAsync({
-              content,
-              trigger: { type: T.WEEKLY, weekday: day + 1, hour, minute, channelId: CHANNEL_ID },
-            }),
-          );
-        }
-      }
-    }
-    return ids;
-  }
-
-  const now = Date.now();
-  const today = todayKey();
-  for (let i = 0; i < ROLLING_DAYS && ids.length < MAX_PER_HABIT; i++) {
-    const date = shiftKey(today, i);
-    if (!isScheduledOn(habit, date)) continue;
-    for (const time of habit.reminderTimes) {
-      const at = fromKey(date);
-      const { hour, minute } = splitTime(time);
-      at.setHours(hour, minute, 0, 0);
-      if (at.getTime() <= now) continue;
-      ids.push(await Notifications.scheduleNotificationAsync({ content, trigger: { type: T.DATE, date: at, channelId: CHANNEL_ID } }));
-    }
-  }
-  return ids;
+  });
 }
 
 /** Recordatorios de beber agua repartidos entre dos horas. */

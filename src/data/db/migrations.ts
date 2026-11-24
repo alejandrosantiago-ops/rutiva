@@ -8,7 +8,10 @@
  *  - `updated_at` para resolver conflictos (last-write-wins),
  *  - `deleted_at` como borrado lógico para propagar eliminaciones.
  */
-export const MIGRATIONS: string[] = [
+import type { Migration } from './types';
+import { migrateToV4 } from './v4';
+
+export const MIGRATIONS: Migration[] = [
   // v1 — esquema inicial
   `
   CREATE TABLE IF NOT EXISTS habits (
@@ -140,4 +143,8 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE sleep_logs ADD COLUMN external_id TEXT;
   CREATE UNIQUE INDEX IF NOT EXISTS idx_sleep_logs_external ON sleep_logs(external_id) WHERE external_id IS NOT NULL;
   `,
+
+  // v4 — esquema relacional: categorías, programación versionada, pausas,
+  // alarmas, notificaciones programadas y sesiones temporizadas (ver v4.ts).
+  migrateToV4,
 ];

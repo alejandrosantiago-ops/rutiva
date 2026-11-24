@@ -6,8 +6,10 @@ interface SleepState {
   logs: SleepLog[];
   loaded: boolean;
   load: () => Promise<void>;
-  save: (input: SleepInput, id?: string) => Promise<SleepLog>;
+  save: (input: SleepInput, id?: string, sessionId?: string | null) => Promise<SleepLog>;
   remove: (id: string) => Promise<void>;
+  /** Deshace un borrado. */
+  restore: (id: string) => Promise<void>;
 }
 
 const byDateDesc = (a: SleepLog, b: SleepLog) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
@@ -20,8 +22,8 @@ export const useSleepStore = create<SleepState>((set) => ({
     set({ logs: await repositories.sleep.list(), loaded: true });
   },
 
-  async save(input, id) {
-    const saved = await repositories.sleep.save(input, id);
+  async save(input, id, sessionId) {
+    const saved = await repositories.sleep.save(input, id, sessionId);
     // El repositorio puede haber reemplazado otra noche con la misma fecha.
     set((s) => ({
       logs: [...s.logs.filter((l) => l.id !== saved.id && l.date !== saved.date), saved].sort(byDateDesc),
@@ -32,5 +34,10 @@ export const useSleepStore = create<SleepState>((set) => ({
   async remove(id) {
     await repositories.sleep.remove(id);
     set((s) => ({ logs: s.logs.filter((l) => l.id !== id) }));
+  },
+
+  async restore(id) {
+    const restored = await repositories.sleep.restore(id);
+    set((s) => ({ logs: [...s.logs.filter((l) => l.id !== id && l.date !== restored.date), restored].sort(byDateDesc) }));
   },
 }));

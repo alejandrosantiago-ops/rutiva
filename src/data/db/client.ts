@@ -1,33 +1,11 @@
 import { Platform } from 'react-native';
 import * as SQLite from 'expo-sqlite';
-import { MIGRATIONS } from '@/data/db/migrations';
+import { runMigrations } from './migrate';
+import type { Db } from './types';
 
 const DATABASE_NAME = 'rutiva.db';
 
-let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
-
-async function migrate(db: SQLite.SQLiteDatabase) {
-  await db.execAsync('PRAGMA journal_mode = WAL;');
-  const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
-  let version = row?.user_version ?? 0;
-  // Las migraciones que reconstruyen tablas necesitan las claves foráneas
-  // desactivadas (si no, DROP TABLE borraría en cascada el historial).
-  // Este PRAGMA no tiene efecto dentro de una transacción, por eso va aquí.
-  await db.execAsync('PRAGMA foreign_keys = OFF;');
-  while (version < MIGRATIONS.length) {
-    const sql = MIGRATIONS[version];
-    const next = version + 1;
-    await db.withTransactionAsync(async () => {
-      await db.execAsync(sql);
-      // PRAGMA no admite parámetros; `next` es un entero controlado por nosotros.
-      await db.execAsync(`PRAGMA user_version = ${next}`);
-    });
-    version = next;
-  }
-  const broken = await db.getAllAsync('PRAGMA foreign_key_check');
-  if (broken.length > 0) throw new Error('La migración dejó referencias rotas en la base de datos');
-  await db.execAsync('PRAGMA foreign_keys = ON;');
-}
+let dbPromise: Promise<Db> | null = null;
 
 /**
  * En web, al recargar la página el worker anterior puede tardar un instante en
@@ -46,11 +24,14 @@ async function openWithRetry(): Promise<SQLite.SQLiteDatabase> {
 }
 
 /** Conexión única y perezosa, migrada antes de devolverse. */
-export function getDb(): Promise<SQLite.SQLiteDatabase> {
+export function getDb(): Promise<Db> {
   if (!dbPromise) {
     dbPromise = (async () => {
-      const db = await openWithRetry();
-      await migrate(db);
+      const sqlite = await openWithRetry();
+      await sqlite.execAsync('PRAGMA journal_mode = WAL;');
+      // expo-sqlite cumple la interfaz Db (API asíncrona).
+      const db = sqlite as unknown as Db;
+      await runMigrations(db);
       return db;
     })().catch((error) => {
       dbPromise = null;

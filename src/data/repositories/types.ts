@@ -4,8 +4,11 @@ import type {
   Habit,
   HabitInput,
   HabitLog,
+  SessionKind,
   SleepInput,
   SleepLog,
+  TimedSession,
+  TimeOfDay,
   WaterLog,
 } from '@/domain/types';
 
@@ -15,20 +18,23 @@ import type {
  * implementarlas un adaptador remoto (Supabase) o uno con sincronización.
  */
 
-export type HabitPatch = Partial<Omit<Habit, 'id' | 'createdAt' | 'updatedAt'>>;
+export type HabitPatch = Partial<Omit<Habit, 'id' | 'createdAt' | 'updatedAt' | 'notificationIds'>>;
 
 export interface HabitRepository {
   list(): Promise<Habit[]>;
   create(input: HabitInput): Promise<Habit>;
   update(id: string, patch: HabitPatch): Promise<Habit>;
-  /** Borrado lógico (deja tombstone para sincronizar). */
+  /** Guarda los avisos programados en el dispositivo, agrupados por hora de recordatorio. */
+  setReminderNotifications(habitId: string, byTime: Record<TimeOfDay, string[]>): Promise<Habit>;
+  /** Borrado lógico (deja tombstone para sincronizar y permite deshacer). */
   remove(id: string): Promise<void>;
+  restore(id: string): Promise<Habit>;
   reorder(orderedIds: string[]): Promise<void>;
 }
 
 export interface HabitLogRepository {
   list(): Promise<HabitLog[]>;
-  /** Fija el progreso de un hábito en una fecha (upsert). */
+  /** Fija el progreso de un hábito en una fecha (upsert: nunca duplica). */
   setValue(habitId: string, date: DateKey, value: number): Promise<HabitLog>;
 }
 
@@ -36,13 +42,23 @@ export interface WaterRepository {
   list(): Promise<WaterLog[]>;
   add(date: DateKey, amountMl: number): Promise<WaterLog>;
   remove(id: string): Promise<void>;
+  restore(id: string): Promise<WaterLog>;
 }
 
 export interface SleepRepository {
   list(): Promise<SleepLog[]>;
   /** Crea o reemplaza el registro de la noche indicada por `input.date`. */
-  save(input: SleepInput, id?: string): Promise<SleepLog>;
+  save(input: SleepInput, id?: string, sessionId?: string | null): Promise<SleepLog>;
   remove(id: string): Promise<void>;
+  restore(id: string): Promise<SleepLog>;
+}
+
+export interface SessionRepository {
+  active(kind: SessionKind): Promise<TimedSession | null>;
+  /** Falla si ya hay una sesión activa de ese tipo (índice único). */
+  start(kind: SessionKind, startedAt: string, habitId?: string, date?: DateKey): Promise<TimedSession>;
+  save(session: TimedSession): Promise<TimedSession>;
+  history(kind: SessionKind, limit?: number): Promise<TimedSession[]>;
 }
 
 export interface SettingsRepository {
@@ -58,6 +74,7 @@ export interface BackupPayload {
   habitLogs: HabitLog[];
   waterLogs: WaterLog[];
   sleepLogs: SleepLog[];
+  timedSessions: TimedSession[];
   settings: Partial<AppSettings>;
 }
 
@@ -66,6 +83,7 @@ export interface Repositories {
   logs: HabitLogRepository;
   water: WaterRepository;
   sleep: SleepRepository;
+  sessions: SessionRepository;
   settings: SettingsRepository;
   exportAll(): Promise<BackupPayload>;
   /** Borra todos los datos locales. */

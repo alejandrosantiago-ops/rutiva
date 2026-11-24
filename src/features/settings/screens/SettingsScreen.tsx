@@ -1,3 +1,6 @@
+import { toast } from '@/ui/toast';
+import { useTimerStore } from '@/features/habits/store/timer';
+import { useSleepSessionStore } from '@/features/sleep/store/sleepSession';
 import { useEffect, useState } from 'react';
 import { Platform, ScrollView, Share, Text, View } from 'react-native';
 import { confirmAction, showAlert, showError } from '@/lib/dialogs';
@@ -76,6 +79,7 @@ export default function SettingsScreen() {
         a.href = URL.createObjectURL(blob);
         a.download = `rutiva-${payload.exportedAt.slice(0, 10)}.json`;
         a.click();
+        toast('Copia descargada');
       } else {
         await Share.share({ title: 'Copia de seguridad de Rutiva', message: json });
       }
@@ -92,7 +96,14 @@ export default function SettingsScreen() {
         await cancelAllNotifications();
         await repositories.resetAll();
         useSettingsStore.getState().reset();
-        await Promise.all([useSettingsStore.getState().load(), useHabitStore.getState().load(), useSleepStore.getState().load(), useWaterStore.getState().load()]);
+        await Promise.all([
+          useSettingsStore.getState().load(),
+          useHabitStore.getState().load(),
+          useSleepStore.getState().load(),
+          useWaterStore.getState().load(),
+          useTimerStore.getState().load(),
+          useSleepSessionStore.getState().load(),
+        ]);
         setName('');
         goBack();
       } catch (e) {

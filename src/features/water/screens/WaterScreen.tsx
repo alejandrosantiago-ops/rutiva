@@ -1,3 +1,4 @@
+import { toast } from '@/ui/toast';
 import { useMemo, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
@@ -48,7 +49,9 @@ export default function WaterScreen() {
   const addMl = (ml: number) => {
     if (total < goal && total + ml >= goal) haptics.success();
     else haptics.light();
-    add(date, ml).catch((e) => showError('No se pudo guardar', e));
+    add(date, ml)
+      .then((log) => log && toast(`+${ml} ml registrados`, { undo: () => remove(log.id) }))
+      .catch((e) => showError('No se pudo guardar', e));
   };
 
   const updateReminder = async <K extends 'waterReminderEnabled' | 'waterReminderStart' | 'waterReminderEnd' | 'waterReminderEveryMinutes'>(
@@ -146,7 +149,11 @@ export default function WaterScreen() {
                     {formatWater(e.amountMl, 'ml')}
                   </Txt>
                   <Txt variant="caption">{format(parseISO(e.createdAt), 'HH:mm')}</Txt>
-                  <PressableScale accessibilityLabel="Eliminar registro" hitSlop={8} onPress={() => remove(e.id).catch((er) => showError('No se pudo eliminar', er))}>
+                  <PressableScale accessibilityLabel="Eliminar registro" hitSlop={8} onPress={() =>
+                      remove(e.id)
+                        .then(() => toast(`Registro de ${e.amountMl} ml eliminado`, { undo: () => useWaterStore.getState().restore(e.id) }))
+                        .catch((er) => showError('No se pudo eliminar', er))
+                    }>
                     <X size={18} color={t.muted} />
                   </PressableScale>
                 </View>

@@ -7,7 +7,8 @@ import { computeSleepWindow, QUALITY_LABELS, SOURCE_LABELS, sleepDateOf, sleepDu
 import type { DateKey, SleepSource } from '@/domain/types';
 import { useSleepStore } from '@/features/sleep/store/useSleepStore';
 import { useSettingsStore } from '@/features/settings/store/useSettingsStore';
-import { sleepSession } from '@/features/sleep/store/sleepSession';
+import { useSleepSessionStore } from '@/features/sleep/store/sleepSession';
+import { toast } from '@/ui/toast';
 import { useToday } from '@/hooks/useToday';
 import { useTheme } from '@/theme/colors';
 import { haptics } from '@/lib/haptics';
@@ -28,7 +29,8 @@ export default function SleepFormScreen() {
   const today = useToday();
   const params = useLocalSearchParams<{ id?: string; start?: string; end?: string }>();
   const logs = useSleepStore((s) => s.logs);
-  const { save, remove } = useSleepStore.getState();
+  const { save, remove, restore } = useSleepStore.getState();
+  const session = useSleepSessionStore((s) => s.session);
   const goal = useSettingsStore((s) => s.settings.sleepGoalMinutes);
   const existing = params.id ? logs.find((l) => l.id === params.id) : undefined;
   const fromTimer = !existing && !!params.start && !!params.end;
@@ -69,9 +71,11 @@ export default function SleepFormScreen() {
       await save(
         { date, bedtimeAt: window.bedtimeAt, wakeAt: window.wakeAt, latencyMinutes: latency, quality, notes: notes.trim() || null, source },
         existing?.id,
+        fromTimer ? (session?.id ?? null) : null,
       );
-      if (fromTimer) await sleepSession.clear();
+      if (fromTimer) await useSleepSessionStore.getState().complete(window.wakeAt);
       haptics.success();
+      toast(existing ? 'Cambios guardados' : `Sueño registrado: ${formatDuration(duration)}`);
       goBack('/sleep');
     } catch (e) {
       showError('No se pudo guardar', e);
@@ -86,6 +90,7 @@ export default function SleepFormScreen() {
       try {
         await remove(existing.id);
         goBack('/sleep');
+        toast('Registro eliminado', { undo: () => restore(existing.id) });
       } catch (e) {
         showError('No se pudo eliminar', e);
       }

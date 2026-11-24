@@ -6,8 +6,9 @@ import { formatEs, todayKey } from '@/domain/dates';
 import { describeProgress, describeRemaining, formatNumber, getValue, progressRatio } from '@/domain/habits';
 import type { Habit } from '@/domain/types';
 import { useHabitStore } from '@/features/habits/store/useHabitStore';
-import { useSettingsStore } from '@/features/settings/store/useSettingsStore';
-import { elapsedMs, timer } from '@/features/habits/store/timer';
+import { useTimerStore } from '@/features/habits/store/timer';
+import { elapsedMs, formatClock } from '@/domain/timer';
+import { toast } from '@/ui/toast';
 import { useLogIndex } from '@/features/habits/hooks/useLogIndex';
 import { haptics } from '@/lib/haptics';
 import { confirmAction, showError } from '@/lib/dialogs';
@@ -26,20 +27,13 @@ function quickSteps(habit: Habit): number[] {
   return [10, 50, 100];
 }
 
-function clock(ms: number) {
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-  const ss = String(s % 60).padStart(2, '0');
-  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
-}
-
 function Stopwatch({ habit, date }: { habit: Habit; date: string }) {
-  const active = useSettingsStore((s) => s.settings.activeTimer);
+  const active = useTimerStore((s) => s.session);
+  const timer = useTimerStore.getState();
   const habits = useHabitStore((s) => s.habits);
   const [now, setNow] = useState(() => Date.now());
   const mine = active?.habitId === habit.id ? active : null;
-  const running = !!mine?.runningSince;
+  const running = mine?.status === 'running';
 
   useEffect(() => {
     if (!running) return;
@@ -62,7 +56,7 @@ function Stopwatch({ habit, date }: { habit: Habit; date: string }) {
             variant="secondary"
             icon={Timer}
             title="Ir al cronómetro"
-            onPress={() => router.replace({ pathname: '/habit/log/[id]', params: { id: other.id, date: active.date } })}
+            onPress={() => router.replace({ pathname: '/habit/log/[id]', params: { id: other.id, date: active.date ?? todayKey() } })}
           />
         ) : (
           <Button className="mt-3" size="sm" variant="secondary" title="Descartar cronómetro" onPress={() => timer.discard()} />
@@ -76,11 +70,11 @@ function Stopwatch({ habit, date }: { habit: Habit; date: string }) {
   return (
     <Card className="items-center py-6">
       <Text className="font-bold text-ink dark:text-ink-dark" style={{ fontSize: 52, fontVariant: ['tabular-nums'] }}>
-        {clock(ms)}
+        {formatClock(ms)}
       </Text>
       <Txt variant="caption" className="mt-1">
         {mine ? (running ? 'Cronometrando…' : 'En pausa') : 'Cronómetro'}
-        {mine && mine.date !== todayKey() ? ` · se sumará al ${formatEs(mine.date, "d 'de' MMM")}` : ''}
+        {mine?.date && mine.date !== todayKey() ? ` · se sumará al ${formatEs(mine.date, "d 'de' MMM")}` : ''}
       </Txt>
       <View className="mt-5 w-full flex-row gap-3">
         {!mine ? (
@@ -91,7 +85,7 @@ function Stopwatch({ habit, date }: { habit: Habit; date: string }) {
             onPress={() => {
               haptics.success();
               setNow(Date.now());
-              timer.start(habit.id, date);
+              timer.start(habit.id, date).catch((e) => showError('No se pudo iniciar', e));
             }}
           />
         ) : (
@@ -116,7 +110,8 @@ function Stopwatch({ habit, date }: { habit: Habit; date: string }) {
                 try {
                   const added = await timer.finish();
                   haptics.success();
-                  if (added === 0) showError('Menos de un minuto', new Error('El tiempo registrado se redondea a minutos; no se sumó nada.'));
+                  if (added === 0) toast('Menos de un minuto: no se sumó tiempo', { tone: 'info' });
+                  else toast(`+${added} min registrados`, { undo: () => useHabitStore.getState().addProgress(habit.id, date, -added) });
                 } catch (e) {
                   showError('No se pudo guardar', e);
                 }
@@ -160,7 +155,12 @@ export default function LogProgressScreen() {
     const completes = value < habit.target && value + delta >= habit.target - 1e-6;
     if (completes) haptics.success();
     else haptics.light();
-    run(() => addProgress(habit.id, date, delta));
+    run(async () => {
+      await addProgress(habit.id, date, delta);
+      toast(completes ? '¡Meta cumplida!' : `+${formatNumber(delta)} ${unit} registrados`, {
+        undo: () => addProgress(habit.id, date, -delta),
+      });
+    });
   };
 
   return (
@@ -222,7 +222,12 @@ export default function LogProgressScreen() {
           onPress={() => {
             if (!custom) return;
             haptics.light();
-            run(() => setValue(habit.id, date, custom));
+            const previous = value;
+            const total = custom;
+            run(async () => {
+              await setValue(habit.id, date, total);
+              toast(`Total fijado en ${formatNumber(total)} ${unit}`, { undo: () => setValue(habit.id, date, previous) });
+            });
             setCustomKey((k) => k + 1);
             setCustom(null);
           }}
@@ -237,7 +242,10 @@ export default function LogProgressScreen() {
           title="Reiniciar este día"
           onPress={() =>
             confirmAction('Reiniciar progreso', `Se borrará el progreso registrado (${describeProgress(habit, value)}).`, 'Reiniciar', () =>
-              run(() => setValue(habit.id, date, 0)),
+              run(async () => {
+                await setValue(habit.id, date, 0);
+                toast('Progreso reiniciado', { undo: () => setValue(habit.id, date, value) });
+              }),
             )
           }
         />
