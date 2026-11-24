@@ -30,6 +30,8 @@ export default function EditHabitScreen() {
         endDate: habit.endDate,
         suggestedTime: habit.suggestedTime,
         reminderTimes: habit.reminderTimes,
+        remindersEnabled: habit.remindersEnabled,
+        reminderMessages: habit.reminderMessages,
       }}
       onSubmit={async (input) => {
         await updateHabit(habit.id, input);

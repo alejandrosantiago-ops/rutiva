@@ -6,6 +6,7 @@ import type { HabitCategory, HabitFrequency, HabitInput, TrackingType, Weekday }
 import { ALL_DAYS, describeFrequency, describeTarget, formatMinutes, TRACKING_LABELS } from '@/domain/habits';
 import { CATEGORIES, CATEGORY_KEYS, QUANTITY_UNITS } from '@/domain/categories';
 import { isWaterHabit } from '@/domain/water';
+import { reminderMessage } from '@/domain/reminders';
 import { orderedWeekdays, todayKey } from '@/domain/dates';
 import { HABIT_COLORS } from '@/theme/colors';
 import { useSettingsStore } from '@/features/settings/store/useSettingsStore';
@@ -50,6 +51,8 @@ export function emptyHabit(): HabitInput {
     endDate: null,
     suggestedTime: null,
     reminderTimes: [],
+    remindersEnabled: true,
+    reminderMessages: {},
   };
 }
 
@@ -368,7 +371,48 @@ export function HabitForm({
 
       {/* ---------- Recordatorios ---------- */}
       <FieldLabel hint={notificationsSupported ? `${form.reminderTimes.length}/5` : 'Solo Android e iOS'}>Recordatorios</FieldLabel>
-      <ReminderTimesField value={form.reminderTimes} onChange={(v) => set('reminderTimes', v)} />
+      {form.reminderTimes.length > 0 ? (
+        <Card className="mb-3 py-1">
+          <ListRow
+            title="Recordatorios activados"
+            subtitle={form.remindersEnabled ? 'Recibirás un aviso a cada hora' : 'Pausados: se conservan las horas'}
+            last
+            right={<Toggle value={form.remindersEnabled} onValueChange={(v) => set('remindersEnabled', v)} />}
+          />
+        </Card>
+      ) : null}
+      <ReminderTimesField
+        value={form.reminderTimes}
+        onChange={(times) =>
+          setForm((f) => ({
+            ...f,
+            reminderTimes: times,
+            // Se conservan solo los mensajes de las horas que siguen.
+            reminderMessages: Object.fromEntries(Object.entries(f.reminderMessages).filter(([time]) => times.includes(time))),
+          }))
+        }
+      />
+      {form.reminderTimes.length > 0 ? (
+        <>
+          <FieldLabel hint="Opcional">Mensajes</FieldLabel>
+          <View className="gap-2.5">
+            {[...form.reminderTimes].sort().map((time) => (
+              <View key={time} className="flex-row items-center gap-2">
+                <View className="w-16 items-center rounded-xl border border-line bg-card py-3 dark:border-line-dark dark:bg-card-dark">
+                  <Txt variant="label">{time}</Txt>
+                </View>
+                <TextField
+                  className="flex-1"
+                  value={form.reminderMessages[time] ?? ''}
+                  onChangeText={(v) => set('reminderMessages', { ...form.reminderMessages, [time]: v })}
+                  placeholder={reminderMessage({ ...form, reminderMessages: {} }, time)}
+                  maxLength={60}
+                />
+              </View>
+            ))}
+          </View>
+        </>
+      ) : null}
       {!notificationsSupported ? (
         <Txt variant="caption" className="mt-2">
           Se guardan igualmente y sonarán al usar la app en el móvil.

@@ -10,6 +10,7 @@
  */
 import type { Migration } from './types';
 import { migrateToV4 } from './v4';
+import { MIGRATION_V5 } from './v5';
 
 export const MIGRATIONS: Migration[] = [
   // v1 — esquema inicial
@@ -147,4 +148,7 @@ export const MIGRATIONS: Migration[] = [
   // v4 — esquema relacional: categorías, programación versionada, pausas,
   // alarmas, notificaciones programadas y sesiones temporizadas (ver v4.ts).
   migrateToV4,
+
+  // v5 — despertador y recordatorios con mensaje propio (ver v5.ts).
+  MIGRATION_V5,
 ];

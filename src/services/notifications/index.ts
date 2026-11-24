@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 import { palette } from '@/theme/palette';
 import { timeToMinutes } from '@/domain/dates';
 import { describeTarget } from '@/domain/habits';
-import { planHabitReminders } from '@/domain/reminders';
+import { habitNotificationUrl, planHabitReminders, reminderMessage } from '@/domain/reminders';
 import { waterReminderSlots } from '@/domain/water';
 import type { Habit, TimeOfDay } from '@/domain/types';
 import { applyReminderPlan, type NotificationGateway } from './sync';
@@ -61,13 +61,6 @@ function splitTime(time: TimeOfDay) {
   return { hour: Math.floor(m / 60), minute: m % 60 };
 }
 
-const HABIT_MESSAGES = [
-  'Es un buen momento para cumplirlo.',
-  'Un pequeño paso hoy suma mucho.',
-  'Mantén viva tu racha.',
-  'Tu yo de mañana te lo agradecerá.',
-];
-
 /** Pasarela real hacia expo-notifications (en las pruebas se usa una falsa). */
 export const expoGateway: NotificationGateway = {
   async schedule(content, trigger) {
@@ -100,11 +93,14 @@ export async function scheduleHabitReminders(
     await cancelNotifications(previousIds);
     return {};
   }
-  const message = HABIT_MESSAGES[Math.floor(Math.random() * HABIT_MESSAGES.length)];
-  return applyReminderPlan(expoGateway, previousIds, plan, {
-    title: habit.name,
-    body: habit.trackingType === 'check' ? message : `Meta de hoy: ${describeTarget(habit)}. ${message}`,
-    data: { url: `/habit/${habit.id}`, habitId: habit.id },
+  const url = habitNotificationUrl(habit);
+  return applyReminderPlan(expoGateway, previousIds, plan, (time) => {
+    const message = reminderMessage(habit, time);
+    return {
+      title: habit.name,
+      body: habit.trackingType === 'check' ? message : `${message} Meta de hoy: ${describeTarget(habit)}.`,
+      data: { url, habitId: habit.id },
+    };
   });
 }
 

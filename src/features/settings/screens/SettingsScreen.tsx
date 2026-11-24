@@ -1,3 +1,4 @@
+import { useWakeStore } from '@/features/alarm/store/useWakeStore';
 import { toast } from '@/ui/toast';
 import { useTimerStore } from '@/features/habits/store/timer';
 import { useSleepSessionStore } from '@/features/sleep/store/sleepSession';
@@ -12,6 +13,7 @@ import {
   BellRing,
   CalendarDays,
   ChevronLeft,
+  AlarmClock,
   Download,
   Droplets,
   Info,
@@ -50,6 +52,7 @@ export default function SettingsScreen() {
   const update = useSettingsStore((s) => s.update);
   const [name, setName] = useState(settings.userName);
   const [permission, setPermission] = useState<string>('undetermined');
+  const wakeCount = useWakeStore((s) => s.alarms.length);
 
   useEffect(() => {
     getPermissionStatus().then(setPermission);
@@ -66,6 +69,7 @@ export default function SettingsScreen() {
     await useHabitStore.getState().rescheduleAll();
     await syncBedtime();
     await syncWaterReminders();
+    await useWakeStore.getState().rescheduleAll();
     setPermission(await getPermissionStatus());
   };
 
@@ -103,6 +107,7 @@ export default function SettingsScreen() {
           useWaterStore.getState().load(),
           useTimerStore.getState().load(),
           useSleepSessionStore.getState().load(),
+          useWakeStore.getState().load(),
         ]);
         setName('');
         goBack();
@@ -213,6 +218,18 @@ export default function SettingsScreen() {
             />
           </View>
         ) : null}
+
+        <FieldLabel>Despertador</FieldLabel>
+        <Card className="py-1">
+          <ListRow
+            icon={AlarmClock}
+            iconColor="#F59E0B"
+            title="Alarmas para despertar"
+            subtitle={wakeCount ? `${wakeCount} ${wakeCount === 1 ? 'alarma' : 'alarmas'}` : 'Configura tu hora de despertar'}
+            last
+            onPress={() => router.push('/alarms')}
+          />
+        </Card>
 
         <FieldLabel>Hidratación</FieldLabel>
         <Card className="py-1">

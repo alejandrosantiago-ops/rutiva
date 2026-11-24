@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { repositories } from '@/data/repositories';
-import { discardSession, finishSession, pauseSession, resumeSession } from '@/domain/timer';
+import { discardSession, elapsedMs, finishSession, pauseSession, resumeSession } from '@/domain/timer';
+import { targetOn } from '@/domain/habits';
+import { clearTimerNotifications, showTimerNotifications } from '@/services/notifications/timer';
 import type { DateKey, TimedSession } from '@/domain/types';
 import { useHabitStore } from './useHabitStore';
 
@@ -20,10 +22,32 @@ interface TimerState {
   discard: () => Promise<void>;
 }
 
+/** Aviso "en marcha" y aviso de meta mientras el cronómetro corre. */
+function syncNotifications(session: TimedSession | null) {
+  if (!session || session.status !== 'running' || !session.habitId || !session.runningSince) {
+    clearTimerNotifications().catch(() => undefined);
+    return;
+  }
+  const habit = useHabitStore.getState().habits.find((h) => h.id === session.habitId);
+  if (!habit) return;
+  const date = session.date ?? session.startedAt.slice(0, 10);
+  const target = targetOn(habit, date);
+  const done = useHabitStore.getState().currentValue(habit.id, date) + elapsedMs(session, Date.now()) / 60000;
+  showTimerNotifications({
+    habitId: habit.id,
+    habitName: habit.name,
+    runningSince: session.runningSince,
+    remainingMinutes: Math.ceil(target - done),
+    targetMinutes: target,
+  }).catch(() => undefined);
+}
+
 export const useTimerStore = create<TimerState>((set, get) => {
   async function persist(next: TimedSession) {
     const saved = await repositories.sessions.save(next);
-    set({ session: saved.status === 'running' || saved.status === 'paused' ? saved : null });
+    const active = saved.status === 'running' || saved.status === 'paused' ? saved : null;
+    set({ session: active });
+    syncNotifications(active);
     return saved;
   }
 
@@ -31,12 +55,16 @@ export const useTimerStore = create<TimerState>((set, get) => {
     session: null,
 
     async load() {
-      set({ session: await repositories.sessions.active('habit') });
+      const session = await repositories.sessions.active('habit');
+      set({ session });
+      syncNotifications(session);
     },
 
     async start(habitId, date) {
       if (get().session) throw new Error('Ya hay un cronómetro en marcha.');
-      set({ session: await repositories.sessions.start('habit', new Date().toISOString(), habitId, date) });
+      const session = await repositories.sessions.start('habit', new Date().toISOString(), habitId, date);
+      set({ session });
+      syncNotifications(session);
     },
 
     async pause() {

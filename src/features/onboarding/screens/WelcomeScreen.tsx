@@ -52,6 +52,8 @@ function toInput(s: Starter): HabitInput {
     endDate: null,
     suggestedTime: null,
     reminderTimes: [],
+    remindersEnabled: true,
+    reminderMessages: {},
   };
 }
 

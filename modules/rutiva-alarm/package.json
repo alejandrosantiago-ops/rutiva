@@ -1,0 +1,7 @@
+{
+  "name": "rutiva-alarm",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Crea alarmas reales en la app Reloj de Android (AlarmClock.ACTION_SET_ALARM).",
+  "main": "index.ts"
+}

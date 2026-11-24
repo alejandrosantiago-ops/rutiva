@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Permiso normal (no requiere diálogo) para pedir a la app Reloj que cree alarmas. -->
+  <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+  <!-- Android 11+: declarar qué intents se consultan para poder comprobar si hay app Reloj. -->
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.SET_ALARM" />
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.SHOW_ALARMS" />
+    </intent>
+  </queries>
+</manifest>

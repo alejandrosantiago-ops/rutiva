@@ -9,6 +9,8 @@ import type {
   SleepLog,
   TimedSession,
   TimeOfDay,
+  WakeAlarm,
+  WakeAlarmInput,
   WaterLog,
 } from '@/domain/types';
 
@@ -61,6 +63,13 @@ export interface SessionRepository {
   history(kind: SessionKind, limit?: number): Promise<TimedSession[]>;
 }
 
+export interface WakeAlarmRepository {
+  list(): Promise<WakeAlarm[]>;
+  save(input: WakeAlarmInput, id?: string): Promise<WakeAlarm>;
+  remove(id: string): Promise<void>;
+  setNotifications(id: string, notificationIds: string[]): Promise<WakeAlarm>;
+}
+
 export interface SettingsRepository {
   load(): Promise<Partial<AppSettings>>;
   save<K extends keyof AppSettings>(key: K, value: AppSettings[K]): Promise<void>;
@@ -75,6 +84,7 @@ export interface BackupPayload {
   waterLogs: WaterLog[];
   sleepLogs: SleepLog[];
   timedSessions: TimedSession[];
+  wakeAlarms: WakeAlarm[];
   settings: Partial<AppSettings>;
 }
 
@@ -84,6 +94,7 @@ export interface Repositories {
   water: WaterRepository;
   sleep: SleepRepository;
   sessions: SessionRepository;
+  wakeAlarms: WakeAlarmRepository;
   settings: SettingsRepository;
   exportAll(): Promise<BackupPayload>;
   /** Borra todos los datos locales. */

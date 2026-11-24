@@ -81,6 +81,10 @@ export interface Habit extends SyncMeta {
   endDate: DateKey | null;
   suggestedTime: TimeOfDay | null;
   reminderTimes: TimeOfDay[];
+  /** Activa o desactiva los recordatorios sin perder sus horas. */
+  remindersEnabled: boolean;
+  /** Mensaje personalizado por hora (p. ej. "Hora de entrenar"); si falta se usa uno genérico. */
+  reminderMessages: Record<TimeOfDay, string>;
   /** Ids de notificaciones programadas en este dispositivo. No se sincronizan. */
   notificationIds: string[];
   pauses: PausePeriod[];
@@ -222,7 +226,34 @@ export type HabitInput = Pick<
   | 'endDate'
   | 'suggestedTime'
   | 'reminderTimes'
+  | 'remindersEnabled'
+  | 'reminderMessages'
 >;
+
+// ---------- Despertador ----------
+
+/**
+ * - app: aviso exacto de Rutiva (notificación con sonido de alarma y posponer).
+ * - system: alarma REAL creada en la app Reloj de Android (suena en bucle a
+ *   pantalla completa). Requiere la app instalada (no funciona en Expo Go).
+ */
+export type WakeAlarmMode = 'app' | 'system';
+export type WakeSound = 'classic' | 'soft' | 'digital' | 'default';
+
+export interface WakeAlarm {
+  id: string;
+  label: string;
+  time: TimeOfDay;
+  daysOfWeek: Weekday[];
+  enabled: boolean;
+  sound: WakeSound;
+  snoozeMinutes: number;
+  mode: WakeAlarmMode;
+  /** Avisos programados en este dispositivo (modo app). */
+  notificationIds: string[];
+}
+
+export type WakeAlarmInput = Omit<WakeAlarm, 'id' | 'notificationIds'>;
 
 export type SleepInput = {
   /** Día en que te despertaste. */

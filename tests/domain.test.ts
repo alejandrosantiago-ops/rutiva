@@ -40,6 +40,8 @@ function habit(over: Partial<Habit> = {}): Habit {
     endDate: null,
     suggestedTime: null,
     reminderTimes: [],
+    remindersEnabled: true,
+    reminderMessages: {},
     notificationIds: [],
     pauses: [],
     scheduleHistory: [],

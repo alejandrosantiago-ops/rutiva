@@ -18,7 +18,12 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.rutiva.app"
+      "package": "com.rutiva.app",
+      "permissions": [
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.USE_EXACT_ALARM",
+        "com.android.alarm.permission.SET_ALARM"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -36,7 +41,12 @@
       [
         "expo-notifications",
         {
-          "color": "#5B5BD6"
+          "color": "#5B5BD6",
+          "sounds": [
+            "./assets/sounds/alarm_classic.wav",
+            "./assets/sounds/alarm_soft.wav",
+            "./assets/sounds/alarm_digital.wav"
+          ]
         }
       ],
       "@react-native-community/datetimepicker",

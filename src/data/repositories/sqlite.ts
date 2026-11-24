@@ -9,11 +9,12 @@ import type {
   SessionKind,
   SleepLog,
   TimedSession,
+  WakeAlarm,
   WaterLog,
   Weekday,
 } from '@/domain/types';
 import type { Db, SqlValue } from '../db/types';
-import { scheduleRows } from '../db/v4';
+import { daysToMask, scheduleRows } from '../db/v4';
 import type { BackupPayload, Repositories } from './types';
 
 /**
@@ -71,6 +72,12 @@ interface AlarmRow {
   window_end: string | null;
   every_minutes: number | null;
   enabled: number;
+  message: string | null;
+  label: string | null;
+  days_mask: number | null;
+  sound: string | null;
+  snooze_minutes: number | null;
+  mode: string | null;
 }
 interface LogRow {
   id: string;
@@ -237,7 +244,11 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
         startDate: r.start_date,
         endDate: r.end_date,
         suggestedTime: r.suggested_time,
-        reminderTimes: (aByHabit.get(r.id) ?? []).filter((a) => a.enabled).map((a) => a.time!),
+        reminderTimes: (aByHabit.get(r.id) ?? []).map((a) => a.time!),
+        remindersEnabled: (aByHabit.get(r.id) ?? []).every((a) => a.enabled === 1),
+        reminderMessages: Object.fromEntries(
+          (aByHabit.get(r.id) ?? []).filter((a) => a.message).map((a) => [a.time!, a.message!]),
+        ),
         notificationIds: (nByHabit.get(r.id) ?? []).map((n) => n.notification_id),
         pauses: (pByHabit.get(r.id) ?? []).map(
           (p): PausePeriod => (p.reason === 'archive' ? { from: p.start_date, to: p.end_date, reason: 'archive' } : { from: p.start_date, to: p.end_date }),
@@ -279,17 +290,25 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
     }
   }
 
-  /** Sincroniza las alarmas por hora: conserva las que siguen (y sus avisos), borra las quitadas. */
+  /**
+   * Sincroniza las alarmas por hora: conserva las que siguen (y sus avisos),
+   * borra las quitadas y actualiza mensaje y activación.
+   */
   async function writeAlarms(db: Db, h: Habit, ts: string) {
     const existing = await db.getAllAsync<AlarmRow>(`SELECT * FROM alarms WHERE kind = 'habit' AND habit_id = ?`, h.id);
     const wanted = new Set(h.reminderTimes);
-    for (const a of existing) if (!wanted.has(a.time!)) await db.runAsync('DELETE FROM alarms WHERE id = ?', a.id);
+    const enabled = h.remindersEnabled === false ? 0 : 1;
+    const message = (time: string) => h.reminderMessages?.[time]?.trim() || null;
+    for (const a of existing) {
+      if (!wanted.has(a.time!)) await db.runAsync('DELETE FROM alarms WHERE id = ?', a.id);
+      else await db.runAsync('UPDATE alarms SET enabled = ?, message = ?, updated_at = ? WHERE id = ?', enabled, message(a.time!), ts, a.id);
+    }
     const have = new Set(existing.map((a) => a.time));
     for (const time of wanted) {
       if (have.has(time)) continue;
       await db.runAsync(
-        `INSERT INTO alarms (id, kind, habit_id, time, enabled, created_at, updated_at) VALUES (?, 'habit', ?, ?, 1, ?, ?)`,
-        uuid(), h.id, time, ts, ts,
+        `INSERT INTO alarms (id, kind, habit_id, time, enabled, message, created_at, updated_at) VALUES (?, 'habit', ?, ?, ?, ?, ?, ?)`,
+        uuid(), h.id, time, enabled, message(time), ts, ts,
       );
     }
   }
@@ -344,6 +363,20 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
       alarmId,
     );
     return rows.map((r) => r.notification_id);
+  }
+
+  async function toWake(db: Db, a: AlarmRow): Promise<WakeAlarm> {
+    return {
+      id: a.id,
+      label: a.label ?? 'Despertador',
+      time: a.time!,
+      daysOfWeek: maskToDays(a.days_mask ?? 127),
+      enabled: a.enabled === 1,
+      sound: (a.sound ?? 'classic') as WakeAlarm['sound'],
+      snoozeMinutes: a.snooze_minutes ?? 10,
+      mode: (a.mode ?? 'app') as WakeAlarm['mode'],
+      notificationIds: await notificationIds(db, a.id),
+    };
   }
 
   const repos: Repositories = {
@@ -401,7 +434,7 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
           await db.runAsync(`UPDATE habits SET ${sets.join(', ')} WHERE id = ?`, ...values, id);
           if (SCHEDULE_KEYS.some((k) => k in patch)) await writeSchedules(db, next, ts);
           if ('pauses' in patch) await writePauses(db, next, ts);
-          if ('reminderTimes' in patch) await writeAlarms(db, next, ts);
+          if ('reminderTimes' in patch || 'remindersEnabled' in patch || 'reminderMessages' in patch) await writeAlarms(db, next, ts);
         });
         return loadHabit(db, id);
       },
@@ -604,6 +637,51 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
       },
     },
 
+    wakeAlarms: {
+      async list() {
+        const db = await getDb();
+        const rows = await db.getAllAsync<AlarmRow>(`SELECT * FROM alarms WHERE kind = 'wake' ORDER BY time, created_at`);
+        return Promise.all(rows.map((a) => toWake(db, a)));
+      },
+      async save(input, id) {
+        const db = await getDb();
+        const ts = now();
+        const values: SqlValue[] = [
+          input.label.trim() || 'Despertador',
+          input.time,
+          daysToMask(input.daysOfWeek),
+          input.enabled ? 1 : 0,
+          input.sound,
+          Math.min(60, Math.max(1, Math.round(input.snoozeMinutes))),
+          input.mode,
+        ];
+        const finalId = id ?? uuid();
+        if (id) {
+          await db.runAsync(
+            `UPDATE alarms SET label = ?, time = ?, days_mask = ?, enabled = ?, sound = ?, snooze_minutes = ?, mode = ?, updated_at = ?
+             WHERE id = ? AND kind = 'wake'`,
+            ...values, ts, id,
+          );
+        } else {
+          await db.runAsync(
+            `INSERT INTO alarms (label, time, days_mask, enabled, sound, snooze_minutes, mode, id, kind, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'wake', ?, ?)`,
+            ...values, finalId, ts, ts,
+          );
+        }
+        return toWake(db, (await db.getFirstAsync<AlarmRow>('SELECT * FROM alarms WHERE id = ?', finalId))!);
+      },
+      async remove(id) {
+        const db = await getDb();
+        await db.runAsync(`DELETE FROM alarms WHERE id = ? AND kind = 'wake'`, id);
+      },
+      async setNotifications(id, ids) {
+        const db = await getDb();
+        await replaceNotifications(db, id, ids);
+        return toWake(db, (await db.getFirstAsync<AlarmRow>('SELECT * FROM alarms WHERE id = ?', id))!);
+      },
+    },
+
     settings: {
       async load() {
         const db = await getDb();
@@ -664,23 +742,25 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
 
     async exportAll(): Promise<BackupPayload> {
       const db = await getDb();
-      const [habits, habitLogs, waterLogs, sleepLogs, settings, sessionRows] = await Promise.all([
+      const [habits, habitLogs, waterLogs, sleepLogs, settings, sessionRows, wakeAlarms] = await Promise.all([
         repos.habits.list(),
         repos.logs.list(),
         repos.water.list(),
         repos.sleep.list(),
         repos.settings.load(),
         db.getAllAsync<SessionRow>('SELECT * FROM timed_sessions ORDER BY started_at'),
+        repos.wakeAlarms.list(),
       ]);
       return {
         app: 'rutiva',
-        version: 4,
+        version: 5,
         exportedAt: now(),
         habits: habits.map((h) => ({ ...h, notificationIds: [] })),
         habitLogs,
         waterLogs,
         sleepLogs,
         timedSessions: sessionRows.map(toSession),
+        wakeAlarms: wakeAlarms.map((a) => ({ ...a, notificationIds: [] })),
         // Los ids de notificaciones son propios de este dispositivo.
         settings: { ...settings, bedtimeNotificationId: null, waterNotificationIds: [] },
       };

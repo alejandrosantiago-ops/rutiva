@@ -94,7 +94,7 @@ function Stopwatch({ habit, date }: { habit: Habit; date: string }) {
               className="flex-1"
               variant="secondary"
               icon={running ? Pause : Play}
-              title={running ? 'Pausar' : 'Reanudar'}
+              title={running ? 'Pausar' : 'Continuar'}
               onPress={() => {
                 haptics.light();
                 setNow(Date.now());

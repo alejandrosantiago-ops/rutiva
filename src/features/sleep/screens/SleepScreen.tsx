@@ -1,3 +1,5 @@
+import { useWakeStore } from '@/features/alarm/store/useWakeStore';
+import { describeUntil, nextWakeAt } from '@/domain/wake';
 import { useEffect, useMemo, useState } from 'react';
 import { Text, View } from 'react-native';
 import { router } from 'expo-router';
@@ -139,6 +141,14 @@ export default function SleepScreen() {
   const [visible, setVisible] = useState(PAGE);
   const days = Number(range);
   const health = platformHealthProvider();
+  const wakeAlarms = useWakeStore((s) => s.alarms);
+  const nextAlarm = useMemo(() => {
+    const now = new Date();
+    return wakeAlarms
+      .map((alarm) => ({ alarm, at: nextWakeAt(alarm, now) }))
+      .filter((x): x is { alarm: (typeof wakeAlarms)[number]; at: Date } => !!x.at)
+      .sort((a, b) => a.at.getTime() - b.at.getTime())[0];
+  }, [wakeAlarms]);
 
   const latest = logs[0] ?? null;
   const series = useMemo(() => sleepSeries(logs, today, days), [logs, today, days]);
@@ -310,6 +320,21 @@ export default function SleepScreen() {
           <TimeField label="Hora del aviso" icon={AlarmClock} value={settings.bedtimeReminderTime} onChange={(v) => updateReminder('bedtimeReminderTime', v)} />
         </View>
       ) : null}
+
+      <Card className="mt-3 py-1">
+        <ListRow
+          icon={AlarmClock}
+          iconColor={t.warning}
+          title="Despertador"
+          subtitle={
+            nextAlarm
+              ? `Próxima: ${nextAlarm.alarm.label} a las ${nextAlarm.alarm.time}, ${describeUntil(nextAlarm.at, new Date())}`
+              : 'Configura la alarma para despertar'
+          }
+          last
+          onPress={() => router.push('/alarms')}
+        />
+      </Card>
 
       {health ? (
         <Card className="mt-3 flex-row items-center gap-3">

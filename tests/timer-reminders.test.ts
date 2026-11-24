@@ -89,6 +89,8 @@ const habit = (over: Partial<Habit> = {}): Habit => ({
   endDate: null,
   suggestedTime: null,
   reminderTimes: ['21:00', '08:30'],
+  remindersEnabled: true,
+  reminderMessages: {},
   notificationIds: [],
   pauses: [],
   scheduleHistory: [],

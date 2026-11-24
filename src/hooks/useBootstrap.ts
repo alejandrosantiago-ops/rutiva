@@ -7,6 +7,8 @@ import { useWaterStore } from '@/features/water/store/useWaterStore';
 import { useTimerStore } from '@/features/habits/store/timer';
 import { useSleepSessionStore } from '@/features/sleep/store/sleepSession';
 import { configureNotifications } from '@/services/notifications';
+import { configureWakeNotifications } from '@/services/notifications/wake';
+import { useWakeStore } from '@/features/alarm/store/useWakeStore';
 
 /** Abre la base de datos, aplica migraciones y carga los stores. */
 export function useBootstrap() {
@@ -26,14 +28,18 @@ export function useBootstrap() {
           useHabitStore.getState().load(),
           useSleepStore.getState().load(),
           useWaterStore.getState().load(),
-          useTimerStore.getState().load(),
           useSleepSessionStore.getState().load(),
+          useWakeStore.getState().load(),
         ]);
+        // Después de los hábitos: su aviso "en marcha" necesita el nombre del hábito.
+        await useTimerStore.getState().load();
         if (!cancelled) setReady(true);
         // Renueva los recordatorios por fecha (intervalos, hábitos con fin) en segundo plano.
         configureNotifications()
+          .then(() => configureWakeNotifications())
           .then(() => {
-            if (useSettingsStore.getState().settings.notificationsEnabled) return useHabitStore.getState().rescheduleAll();
+            if (!useSettingsStore.getState().settings.notificationsEnabled) return;
+            return Promise.all([useHabitStore.getState().rescheduleAll(), useWakeStore.getState().rescheduleAll()]);
           })
           .catch(() => undefined);
       } catch (e) {

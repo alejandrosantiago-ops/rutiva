@@ -35,6 +35,8 @@ const input = (over: Partial<HabitInput> = {}): HabitInput => ({
   endDate: null,
   suggestedTime: '08:00',
   reminderTimes: ['09:00', '15:00'],
+  remindersEnabled: true,
+  reminderMessages: {},
   ...over,
 });
 
@@ -212,7 +214,7 @@ test('v3 → v4: hábitos, historial, pausas, recordatorios, ajustes y sesiones 
     db.raw.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(k, v);
   }
 
-  assert.equal(await runMigrations(db), 4);
+  assert.equal(await runMigrations(db), 5);
   const repos = createSqliteRepositories({ getDb: async () => db, uuid: randomUUID });
 
   const [habit] = await repos.habits.list();

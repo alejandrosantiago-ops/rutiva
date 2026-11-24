@@ -1,6 +1,7 @@
 import { fromKey, shiftKey, timeToMinutes, toKey } from './dates.ts';
 import { isPaused, isScheduledOn } from './habits.ts';
-import type { Habit, TimeOfDay } from './types.ts';
+import type { Habit, HabitCategory, TimeOfDay } from './types.ts';
+import { isWaterHabit } from './water.ts';
 
 /*
  * Planificación pura de recordatorios: decide QUÉ avisos deben existir para un
@@ -36,7 +37,7 @@ function split(time: TimeOfDay) {
  *   que se renuevan cada vez que se abre la app.
  */
 export function planHabitReminders(habit: Habit, now: Date, enabledGlobally = true): PlannedReminder[] {
-  if (!enabledGlobally || habit.reminderTimes.length === 0 || habit.archived || habit.deletedAt || isPaused(habit)) return [];
+  if (!enabledGlobally || !habit.remindersEnabled || habit.reminderTimes.length === 0 || habit.archived || habit.deletedAt || isPaused(habit)) return [];
   const times = [...new Set(habit.reminderTimes)].sort();
 
   const repeating = !habit.endDate && (habit.frequency === 'daily' || habit.frequency === 'weekly');
@@ -65,4 +66,33 @@ export function planHabitReminders(habit: Habit, now: Date, enabledGlobally = tr
     }
   }
   return out;
+}
+
+// ---------- Contenido y destino de cada aviso ----------
+
+const CATEGORY_MESSAGES: Partial<Record<HabitCategory, string>> = {
+  exercise: 'Hora de entrenar.',
+  hydration: 'Recuerda beber agua.',
+  study: 'Hora de estudiar.',
+  sleep: 'Prepárate para dormir.',
+  health: 'Cuida tu salud: es el momento.',
+  food: 'Hora de comer bien.',
+  wellbeing: 'Regálate unos minutos para ti.',
+  work: 'Momento de concentrarte.',
+  productivity: 'Momento de concentrarte.',
+};
+
+/** Texto del aviso: el personalizado de esa hora o uno según la categoría. */
+export function reminderMessage(habit: Pick<Habit, 'category' | 'reminderMessages' | 'name'>, time: TimeOfDay): string {
+  return habit.reminderMessages[time]?.trim() || CATEGORY_MESSAGES[habit.category] || `Es momento de: ${habit.name}.`;
+}
+
+/**
+ * Pantalla que abre la notificación al tocarla: el registro de progreso para
+ * cantidad y duración, la hidratación para el agua y el detalle en el resto.
+ */
+export function habitNotificationUrl(habit: Pick<Habit, 'id' | 'trackingType' | 'category' | 'unit'>): string {
+  if (isWaterHabit(habit)) return '/water';
+  if (habit.trackingType === 'quantity' || habit.trackingType === 'duration') return `/habit/log/${habit.id}`;
+  return `/habit/${habit.id}`;
 }

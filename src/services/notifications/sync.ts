@@ -12,16 +12,19 @@ export interface NotificationGateway {
  * programa los nuevos. Devuelve los ids agrupados por hora, para guardarlos
  * junto a cada alarma. Editar = cancelar + programar; desactivar = plan vacío.
  */
+type Content = { title: string; body: string; data?: Record<string, unknown> };
+
 export async function applyReminderPlan(
   gateway: NotificationGateway,
   previousIds: string[],
   plan: PlannedReminder[],
-  content: { title: string; body: string; data?: Record<string, unknown> },
+  /** Contenido fijo o uno por hora (mensajes personalizados). */
+  content: Content | ((time: TimeOfDay) => Content),
 ): Promise<Record<TimeOfDay, string[]>> {
   await Promise.all(previousIds.map((id) => gateway.cancel(id).catch(() => undefined)));
   const byTime: Record<TimeOfDay, string[]> = {};
   for (const p of plan) {
-    const id = await gateway.schedule(content, p.trigger);
+    const id = await gateway.schedule(typeof content === 'function' ? content(p.time) : content, p.trigger);
     (byTime[p.time] ??= []).push(id);
   }
   return byTime;
