@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { Platform } from 'react-native';
-import { useSettingsStore } from '@/stores/useSettingsStore';
+import { useSettingsStore } from '@/features/settings/store/useSettingsStore';
 
 const enabled = () => Platform.OS !== 'web' && useSettingsStore.getState().settings.hapticsEnabled;
 

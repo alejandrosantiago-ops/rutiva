@@ -9,7 +9,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
 import { useBootstrap } from '@/hooks/useBootstrap';
 import { useTheme } from '@/theme/colors';
-import { Txt } from '@/components/ui/primitives';
+import { Txt } from '@/ui/primitives';
 
 function useNotificationNavigation() {
   useEffect(() => {

@@ -1,6 +1,6 @@
 import { sleepDateOf } from '@/domain/sleep';
 import type { SleepInput } from '@/domain/types';
-import { useSleepStore } from '@/stores/useSleepStore';
+import { useSleepStore } from '@/features/sleep/store/useSleepStore';
 import type { HealthProvider } from './types';
 
 /**

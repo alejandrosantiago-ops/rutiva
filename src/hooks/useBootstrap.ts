@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { colorScheme } from 'nativewind';
-import { useSettingsStore } from '@/stores/useSettingsStore';
-import { useHabitStore } from '@/stores/useHabitStore';
-import { useSleepStore } from '@/stores/useSleepStore';
-import { useWaterStore } from '@/stores/useWaterStore';
+import { useSettingsStore } from '@/features/settings/store/useSettingsStore';
+import { useHabitStore } from '@/features/habits/store/useHabitStore';
+import { useSleepStore } from '@/features/sleep/store/useSleepStore';
+import { useWaterStore } from '@/features/water/store/useWaterStore';
 import { configureNotifications } from '@/services/notifications';
 
 /** Abre la base de datos, aplica migraciones y carga los stores. */
