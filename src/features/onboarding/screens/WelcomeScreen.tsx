@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Keyboard, ScrollView, Text, View } from 'react-native';
+import { KeyboardSafe } from '@/ui/layout';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, { FadeInRight, FadeOutLeft } from 'react-native-reanimated';
@@ -68,6 +69,12 @@ export default function WelcomeScreen() {
   const [sleepGoal, setSleepGoal] = useState(settings.sleepGoalMinutes);
   const [saving, setSaving] = useState(false);
 
+  // Al cambiar de paso se cierra el teclado para que no tape los botones.
+  const goTo = (next: number) => {
+    Keyboard.dismiss();
+    setStep(Math.max(0, Math.min(STEPS - 1, next)));
+  };
+
   const toggle = (i: number) => {
     haptics.selection();
     setSelected((prev) => {
@@ -105,6 +112,7 @@ export default function WelcomeScreen() {
 
   return (
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-canvas dark:bg-canvas-dark">
+      <KeyboardSafe>
       {/* Progreso */}
       <View className="flex-row items-center justify-between px-5 pt-2">
         <View className="flex-row gap-1.5">
@@ -117,7 +125,12 @@ export default function WelcomeScreen() {
         </PressableScale>
       </View>
 
-      <ScrollView className="flex-1" contentContainerClassName="px-5 pb-6 pt-6" keyboardShouldPersistTaps="handled">
+      <ScrollView
+        className="flex-1"
+        contentContainerClassName="px-5 pb-6 pt-6"
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         <Animated.View key={step} entering={FadeInRight.springify().damping(20)} exiting={FadeOutLeft.duration(150)}>
           {step === 0 ? (
             <>
@@ -129,7 +142,7 @@ export default function WelcomeScreen() {
                 Organiza tus hábitos, registra tu progreso en segundos y cuida tu descanso. Todo se guarda solo en tu móvil.
               </Txt>
               <FieldLabel hint="Opcional">¿Cómo te llamas?</FieldLabel>
-              <TextField value={name} onChangeText={setName} placeholder="Tu nombre" maxLength={24} returnKeyType="next" onSubmitEditing={() => setStep(1)} />
+              <TextField value={name} onChangeText={setName} placeholder="Tu nombre" maxLength={24} returnKeyType="next" onSubmitEditing={() => goTo(1)} />
             </>
           ) : null}
 
@@ -222,15 +235,16 @@ export default function WelcomeScreen() {
 
       {/* Acciones al alcance del pulgar */}
       <View className="flex-row gap-3 px-5 pb-2 pt-3">
-        {step > 0 ? <Button className="flex-1" variant="secondary" title="Atrás" onPress={() => setStep((s) => s - 1)} /> : null}
+        {step > 0 ? <Button className="flex-1" variant="secondary" title="Atrás" onPress={() => goTo(step - 1)} /> : null}
         <Button
           className="flex-[2]"
           icon={step === STEPS - 1 ? Check : ArrowRight}
           title={step === STEPS - 1 ? 'Empezar' : 'Continuar'}
           disabled={saving}
-          onPress={() => (step === STEPS - 1 ? finish() : setStep((s) => s + 1))}
+          onPress={() => (step === STEPS - 1 ? finish() : goTo(step + 1))}
         />
       </View>
+      </KeyboardSafe>
     </SafeAreaView>
   );
 }

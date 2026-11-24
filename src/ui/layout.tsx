@@ -5,6 +5,19 @@ import { goBack } from '@/lib/navigation';
 import { X } from 'lucide-react-native';
 import { IconButton, Txt } from '@/ui/primitives';
 
+/**
+ * Sube el contenido (y los botones inferiores) por encima del teclado.
+ * En Android, Expo SDK 58 dibuja la app de borde a borde y la ventana ya no se
+ * encoge sola al abrir el teclado, así que también hace falta aquí.
+ */
+export function KeyboardSafe({ children }: { children: ReactNode }) {
+  return (
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding" keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 8}>
+      {children}
+    </KeyboardAvoidingView>
+  );
+}
+
 /** Contenedor de pantalla de pestaña: fondo, safe area y scroll. */
 export function Screen({
   children,
@@ -69,7 +82,7 @@ export function ModalScreen({
 }) {
   return (
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-canvas dark:bg-canvas-dark">
-      <KeyboardAvoidingView className="flex-1" behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardSafe>
         <View className="flex-row items-center justify-between px-5 pb-2 pt-2">
           <Txt variant="title">{title}</Txt>
           <IconButton icon={X} label="Cerrar" onPress={() => goBack()} size={40} />
@@ -83,7 +96,7 @@ export function ModalScreen({
           {children}
         </ScrollView>
         {footer ? <View className="border-t border-line px-5 pb-2 pt-3 dark:border-line-dark">{footer}</View> : null}
-      </KeyboardAvoidingView>
+      </KeyboardSafe>
     </SafeAreaView>
   );
 }
