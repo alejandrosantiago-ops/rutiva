@@ -99,4 +99,6 @@ export interface Repositories {
   exportAll(): Promise<BackupPayload>;
   /** Borra todos los datos locales. */
   resetAll(): Promise<void>;
+  /** Sustituye todos los datos locales por los de una copia de seguridad. */
+  importAll(backup: BackupPayload): Promise<void>;
 }

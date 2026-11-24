@@ -1,9 +1,10 @@
+import { applyBackup, exportBackupFile, pickBackup } from '@/features/settings/backupActions';
 import { useWakeStore } from '@/features/alarm/store/useWakeStore';
 import { toast } from '@/ui/toast';
 import { useTimerStore } from '@/features/habits/store/timer';
 import { useSleepSessionStore } from '@/features/sleep/store/sleepSession';
 import { useEffect, useState } from 'react';
-import { Platform, ScrollView, Share, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { confirmAction, showAlert, showError } from '@/lib/dialogs';
 import { goBack } from '@/lib/navigation';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -15,6 +16,7 @@ import {
   ChevronLeft,
   AlarmClock,
   Download,
+  Upload,
   Droplets,
   Info,
   Moon,
@@ -75,20 +77,33 @@ export default function SettingsScreen() {
 
   const exportData = async () => {
     try {
-      const payload = await repositories.exportAll();
-      const json = JSON.stringify(payload, null, 2);
-      if (Platform.OS === 'web') {
-        const blob = new Blob([json], { type: 'application/json' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `rutiva-${payload.exportedAt.slice(0, 10)}.json`;
-        a.click();
-        toast('Copia descargada');
-      } else {
-        await Share.share({ title: 'Copia de seguridad de Rutiva', message: json });
-      }
+      const how = await exportBackupFile();
+      toast(how === 'downloaded' ? 'Copia descargada' : 'Copia lista para guardar');
     } catch (e) {
       showError('No se pudo exportar', e);
+    }
+  };
+
+  const importData = async () => {
+    try {
+      const picked = await pickBackup();
+      if (!picked) return;
+      confirmAction(
+        'Importar copia',
+        `La copia contiene ${picked.summary}. Sustituirá TODOS los datos actuales de este dispositivo.`,
+        'Importar',
+        async () => {
+          try {
+            await applyBackup(picked.backup);
+            setName(useSettingsStore.getState().settings.userName);
+            toast('Copia importada');
+          } catch (e) {
+            showError('No se pudo importar', e);
+          }
+        },
+      );
+    } catch (e) {
+      showError('No se pudo leer la copia', e);
     }
   };
 
@@ -288,7 +303,8 @@ export default function SettingsScreen() {
 
         <FieldLabel>Datos</FieldLabel>
         <Card className="py-1">
-          <ListRow icon={Download} title="Exportar copia de seguridad" subtitle="Archivo JSON con todos tus datos" onPress={exportData} />
+          <ListRow icon={Download} title="Exportar copia de seguridad" subtitle="Archivo .json con todos tus datos" onPress={exportData} />
+          <ListRow icon={Upload} title="Importar copia de seguridad" subtitle="Sustituye los datos por los de un archivo" onPress={importData} />
           <ListRow icon={RotateCcw} title="Restablecer datos" subtitle="Borra todo lo guardado en este dispositivo" destructive last onPress={resetData} />
         </Card>
 

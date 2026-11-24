@@ -62,7 +62,8 @@
             "backgroundColor": "#0B0C10"
           }
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "scheme": "rutiva"
   }

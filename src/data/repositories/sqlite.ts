@@ -269,6 +269,31 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
     return habit;
   }
 
+  /** Inserta la fila de definición del hábito conservando id y fechas. */
+  async function insertHabitRow(db: Db, h: Habit) {
+    await db.runAsync(
+      `INSERT INTO habits (id, name, description, category_id, icon, color, tracking_type, unit, start_date, end_date,
+         suggested_time, archived, sort_order, created_at, updated_at, deleted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      h.id, h.name, h.description, h.category, h.icon, h.color, h.trackingType, h.unit, h.startDate, h.endDate,
+      h.suggestedTime, h.archived ? 1 : 0, h.sortOrder, h.createdAt, h.updatedAt, h.deletedAt,
+    );
+  }
+
+  const DELETE_ALL_USER_DATA = `
+    DELETE FROM scheduled_notifications;
+    UPDATE sleep_logs SET session_id = NULL;
+    DELETE FROM timed_sessions;
+    DELETE FROM alarms;
+    DELETE FROM habit_logs;
+    DELETE FROM habit_schedules;
+    DELETE FROM habit_pauses;
+    DELETE FROM habits;
+    DELETE FROM water_logs;
+    DELETE FROM sleep_logs;
+    DELETE FROM user_settings;
+  `;
+
   async function writeSchedules(db: Db, h: Habit, ts: string) {
     await db.runAsync('DELETE FROM habit_schedules WHERE habit_id = ?', h.id);
     for (const r of scheduleRows(h.id, h.startDate, h, h.scheduleHistory)) {
@@ -402,13 +427,7 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
           deletedAt: null,
         };
         await db.withTransactionAsync(async () => {
-          await db.runAsync(
-            `INSERT INTO habits (id, name, description, category_id, icon, color, tracking_type, unit, start_date, end_date,
-               suggested_time, archived, sort_order, created_at, updated_at, deleted_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL)`,
-            habit.id, habit.name, habit.description, habit.category, habit.icon, habit.color, habit.trackingType, habit.unit,
-            habit.startDate, habit.endDate, habit.suggestedTime, habit.sortOrder, ts, ts,
-          );
+          await insertHabitRow(db, habit);
           await writeSchedules(db, habit, ts);
           await writeAlarms(db, habit, ts);
         });
@@ -769,19 +788,66 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
     async resetAll() {
       const db = await getDb();
       await db.withTransactionAsync(async () => {
-        await db.execAsync(`
-          DELETE FROM scheduled_notifications;
-          UPDATE sleep_logs SET session_id = NULL;
-          DELETE FROM timed_sessions;
-          DELETE FROM alarms;
-          DELETE FROM habit_logs;
-          DELETE FROM habit_schedules;
-          DELETE FROM habit_pauses;
-          DELETE FROM habits;
-          DELETE FROM water_logs;
-          DELETE FROM sleep_logs;
-          DELETE FROM user_settings;
-        `);
+        await db.execAsync(DELETE_ALL_USER_DATA);
+      });
+    },
+
+    async importAll(b) {
+      const db = await getDb();
+      const ts = now();
+      await db.withTransactionAsync(async () => {
+        await db.execAsync(DELETE_ALL_USER_DATA);
+        for (const h of b.habits) {
+          await insertHabitRow(db, h);
+          await writeSchedules(db, h, ts);
+          await writePauses(db, h, ts);
+          await writeAlarms(db, h, ts);
+        }
+        for (const l of b.habitLogs) {
+          await db.runAsync(
+            `INSERT INTO habit_logs (id, habit_id, date, value, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, NULL)
+             ON CONFLICT (habit_id, date) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+            l.id || uuid(), l.habitId, l.date, l.value, l.createdAt || ts, l.updatedAt || ts,
+          );
+        }
+        for (const w of b.waterLogs) {
+          await db.runAsync(
+            'INSERT OR IGNORE INTO water_logs (id, date, amount_ml, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)',
+            w.id || uuid(), w.date, w.amountMl, w.createdAt || ts, w.updatedAt || ts,
+          );
+        }
+        // Una noche por fecha: si la copia trae dos, gana la más reciente.
+        const nights = [...b.sleepLogs].sort((x, y) => (x.updatedAt < y.updatedAt ? 1 : -1));
+        for (const n of nights) {
+          await db.runAsync(
+            `INSERT OR IGNORE INTO sleep_logs (id, date, bedtime_at, wake_at, duration_minutes, latency_minutes, quality, notes, source,
+               external_id, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+            n.id || uuid(), n.date, n.bedtimeAt, n.wakeAt, n.durationMinutes, n.latencyMinutes, n.quality, n.notes, n.source,
+            n.externalId, n.createdAt || ts, n.updatedAt || ts,
+          );
+        }
+        for (const ses of b.timedSessions) {
+          await db.runAsync(
+            `INSERT OR IGNORE INTO timed_sessions (id, kind, habit_id, log_date, started_at, running_since, accumulated_ms, status, ended_at,
+               result_minutes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+            ses.id || uuid(), ses.kind, ses.habitId, ses.date, ses.startedAt, Math.max(0, Math.round(ses.accumulatedMs)), ses.status,
+            ses.endedAt, ses.resultMinutes, ts, ts,
+          );
+        }
+        for (const a of b.wakeAlarms) {
+          await db.runAsync(
+            `INSERT OR IGNORE INTO alarms (id, kind, label, time, days_mask, enabled, sound, snooze_minutes, mode, created_at, updated_at)
+             VALUES (?, 'wake', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            a.id || uuid(), a.label || 'Despertador', a.time, daysToMask(a.daysOfWeek ?? []), a.enabled ? 1 : 0,
+            ['classic', 'soft', 'digital', 'default'].includes(a.sound) ? a.sound : 'classic',
+            Math.min(60, Math.max(1, a.snoozeMinutes || 10)), a.mode === 'system' ? 'system' : 'app', ts, ts,
+          );
+        }
+        // Ajustes (los ids de notificaciones son de cada dispositivo y no se importan).
+        for (const [key, value] of Object.entries(b.settings)) {
+          if (key === 'bedtimeNotificationId' || key === 'waterNotificationIds' || value === undefined) continue;
+          await repos.settings.save(key as keyof AppSettings, value as never);
+        }
       });
     },
   };
