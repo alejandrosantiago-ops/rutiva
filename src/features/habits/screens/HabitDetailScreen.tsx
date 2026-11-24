@@ -142,7 +142,7 @@ export default function HabitDetailScreen() {
       </View>
 
       <ScrollView contentContainerClassName="px-5 pb-16" showsVerticalScrollIndicator={false}>
-        <Animated.View entering={FadeInDown.springify().damping(18)} className="items-center pb-2 pt-2">
+        <Animated.View entering={FadeInDown.springify().damping(18)} style={{ alignItems: 'center', paddingVertical: 8 }}>
           <IconBadge icon={Icon} color={habit.color} size={76} />
           <Txt variant="title" className="mt-4 text-center">
             {habit.name}

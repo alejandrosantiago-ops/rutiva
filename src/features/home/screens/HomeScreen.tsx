@@ -30,7 +30,7 @@ import { haptics } from '@/lib/haptics';
 import { showError } from '@/lib/dialogs';
 import { Screen } from '@/ui/layout';
 import { Fab } from '@/ui/fab';
-import { Card, IconBadge, IconButton, PressableScale, SectionHeader, Txt } from '@/ui/primitives';
+import { Button, Card, IconBadge, IconButton, PressableScale, SectionHeader, Txt } from '@/ui/primitives';
 import { ProgressBar, ProgressRing } from '@/ui/progress';
 import { WeekStrip } from '@/features/habits/components/WeekStrip';
 import { DayHabitList } from '@/features/habits/components/DayHabitList';
@@ -280,9 +280,7 @@ export default function HomeScreen() {
         title={isToday ? 'Hábitos de hoy' : formatEs(selected, "EEEE d 'de' MMMM")}
         action={
           isToday ? undefined : (
-            <PressableScale onPress={() => setSelected(today)}>
-              <Text className="text-[13px] font-semibold text-brand-500 dark:text-brand-300">Volver a hoy</Text>
-            </PressableScale>
+            <Button size="sm" variant="ghost" title="Volver a hoy" onPress={() => setSelected(today)} />
           )
         }
       />

@@ -79,10 +79,10 @@ export default function WaterScreen() {
       <ScrollView contentContainerClassName="px-5 pb-16" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         {/* Selector de día */}
         <View className="mt-2 flex-row items-center justify-between">
-          <IconButton icon={ChevronLeft} tone="plain" label="Día anterior" size={36} onPress={() => setDate(shiftKey(date, -1))} />
+          <IconButton icon={ChevronLeft} label="Día anterior" size={40} onPress={() => setDate(shiftKey(date, -1))} />
           <Txt variant="heading">{date === today ? 'Hoy' : formatEs(date, "EEEE d 'de' MMMM")}</Txt>
           <View style={{ opacity: date >= today ? 0.25 : 1 }}>
-            <IconButton icon={ChevronRight} tone="plain" label="Día siguiente" size={36} onPress={() => date < today && setDate(shiftKey(date, 1))} />
+            <IconButton icon={ChevronRight} label="Día siguiente" size={40} onPress={() => date < today && setDate(shiftKey(date, 1))} />
           </View>
         </View>
 

@@ -54,6 +54,7 @@ export function Segmented<T extends string>({
   value: T;
   onChange: (value: T) => void;
 }) {
+  const t = useTheme();
   const [width, setWidth] = useState(0);
   const index = Math.max(0, options.findIndex((o) => o.value === value));
   const segment = width ? (width - 8) / options.length : 0;
@@ -67,9 +68,26 @@ export function Segmented<T extends string>({
       className="flex-row rounded-2xl bg-subtle p-1 dark:bg-subtle-dark"
     >
       {width > 0 ? (
+        // Estilos en línea: NativeWind no aplica className a Animated.View de Reanimated en Android/iOS.
         <Animated.View
-          style={indicator}
-          className="absolute bottom-1 left-1 top-1 rounded-xl bg-card shadow-sm dark:bg-elevated-dark"
+          style={[
+            {
+              position: 'absolute',
+              top: 4,
+              bottom: 4,
+              left: 4,
+              borderRadius: 12,
+              backgroundColor: t.scheme === 'dark' ? t.elevated : t.card,
+              borderWidth: 1,
+              borderColor: t.line,
+              shadowColor: '#000',
+              shadowOpacity: 0.08,
+              shadowRadius: 4,
+              shadowOffset: { width: 0, height: 1 },
+              elevation: 2,
+            },
+            indicator,
+          ]}
         />
       ) : null}
       {options.map((o) => (
@@ -185,7 +203,7 @@ export function Stepper({
   format?: (v: number) => string;
 }) {
   const t = useTheme();
-  const btn = 'h-11 w-11 items-center justify-center rounded-xl bg-subtle dark:bg-subtle-dark';
+  const btn = 'h-11 w-11 items-center justify-center rounded-xl border border-line bg-card dark:border-line-dark dark:bg-card-dark';
   return (
     <View className="flex-row items-center gap-3">
       <PressableScale
@@ -528,7 +546,7 @@ export function ChipGroup<T extends string>({
 }) {
   const t = useTheme();
   return (
-    <View className="flex-row flex-wrap gap-2">
+    <View className="flex-row flex-wrap gap-2.5">
       {options.map((o) => {
         const selected = o.value === value;
         const color = o.color ?? t.brand;
@@ -544,13 +562,13 @@ export function ChipGroup<T extends string>({
               onChange(o.value);
             }}
             className={cx(
-              'h-9 flex-row items-center gap-1.5 rounded-full border px-3.5',
+              'min-h-[44px] flex-row items-center gap-2 rounded-2xl border px-4 py-2.5',
               !selected && 'border-line bg-card dark:border-line-dark dark:bg-card-dark',
             )}
             style={selected ? { backgroundColor: color, borderColor: color } : undefined}
           >
             {Icon ? <Icon size={14} color={selected ? '#FFFFFF' : color} strokeWidth={2.4} /> : null}
-            <Text className={cx('text-[13px] font-semibold', selected ? 'text-white' : 'text-ink dark:text-ink-dark')}>{o.label}</Text>
+            <Text className={cx('text-[14px] font-semibold', selected ? 'text-white' : 'text-ink dark:text-ink-dark')}>{o.label}</Text>
           </PressableScale>
         );
       })}

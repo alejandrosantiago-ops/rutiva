@@ -66,8 +66,22 @@ export function ToastHost() {
         entering={FadeInDown.springify().damping(18)}
         exiting={FadeOutDown.duration(160)}
         accessibilityLiveRegion="polite"
-        className="w-full max-w-[520px] flex-row items-center gap-3 rounded-2xl px-4 py-3 shadow-lg"
-        style={{ backgroundColor: t.scheme === 'dark' ? '#F2F4F8' : '#15171E' }}
+        style={{
+          width: '100%',
+          maxWidth: 520,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 12,
+          borderRadius: 16,
+          paddingHorizontal: 16,
+          paddingVertical: 12,
+          backgroundColor: t.scheme === 'dark' ? '#F2F4F8' : '#15171E',
+          shadowColor: '#000',
+          shadowOpacity: 0.2,
+          shadowRadius: 12,
+          shadowOffset: { width: 0, height: 4 },
+          elevation: 6,
+        }}
       >
         <Icon size={18} color={iconColor} />
         <Text className="flex-1 text-[14px] font-medium" style={{ color: t.scheme === 'dark' ? '#0E1116' : '#F2F4F8' }} numberOfLines={2}>

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { endOfMonth } from 'date-fns';
-import { ChevronDown, ChevronUp, Lock, Pencil } from 'lucide-react-native';
+import { CalendarCheck, ChevronUp, Lock, Pencil } from 'lucide-react-native';
 import { formatEs, fromKey, rangeKeys, toKey } from '@/domain/dates';
 import { dayProgress, getValue, isActive, isPausedOn, isScheduledOn, progressRatio } from '@/domain/habits';
 import { useHabitStore } from '@/features/habits/store/useHabitStore';
@@ -11,7 +11,7 @@ import { useSelectedDay, useToday } from '@/hooks/useToday';
 import { useTheme } from '@/theme/colors';
 import { haptics } from '@/lib/haptics';
 import { Screen } from '@/ui/layout';
-import { Card, EmptyState, PressableScale, SectionHeader, Txt, cx } from '@/ui/primitives';
+import { Button, Card, EmptyState, PressableScale, SectionHeader, Txt, cx } from '@/ui/primitives';
 import { HeatCalendar, HeatLegend } from '@/features/calendar/components/HeatCalendar';
 import { DaySummary } from '@/features/calendar/components/DaySummary';
 import { DayHabitList } from '@/features/habits/components/DayHabitList';
@@ -126,9 +126,7 @@ export default function CalendarScreen() {
         <View className="flex-row items-center gap-3">
           {monthStats.avg !== null ? <Txt variant="label">{Math.round(monthStats.avg * 100)}%</Txt> : null}
           {selected !== today ? (
-            <PressableScale onPress={() => setSelected(today)}>
-              <Text className="text-[13px] font-semibold text-brand-500 dark:text-brand-300">Hoy</Text>
-            </PressableScale>
+            <Button size="sm" variant="ghost" icon={CalendarCheck} title="Hoy" onPress={() => setSelected(today)} />
           ) : null}
         </View>
       </View>
@@ -140,13 +138,13 @@ export default function CalendarScreen() {
       ) : (
         <>
           <DaySummary date={selected} today={today} habits={habits} logs={logs} focusId={filter} />
-          <PressableScale onPress={() => setEditing((e) => !e)} className="mt-3 flex-row items-center justify-center gap-1.5 py-2">
-            <Pencil size={14} color={t.brand} />
-            <Text className="text-[13px] font-semibold text-brand-500 dark:text-brand-300">
-              {editing ? 'Ocultar registro' : selected === today ? 'Registrar hábitos de hoy' : 'Corregir registros de este día'}
-            </Text>
-            {editing ? <ChevronUp size={14} color={t.brand} /> : <ChevronDown size={14} color={t.brand} />}
-          </PressableScale>
+          <Button
+            className="mt-3"
+            variant={editing ? 'secondary' : 'ghost'}
+            icon={editing ? ChevronUp : Pencil}
+            title={editing ? 'Ocultar registro' : selected === today ? 'Registrar hábitos de hoy' : 'Corregir registros de este día'}
+            onPress={() => setEditing((e) => !e)}
+          />
           {editing ? (
             <View className="mt-2">
               <DayHabitList date={selected} today={today} />

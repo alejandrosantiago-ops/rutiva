@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Keyboard, ScrollView, Text, View } from 'react-native';
+import { Keyboard, ScrollView, View } from 'react-native';
 import { KeyboardSafe } from '@/ui/layout';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, { FadeInRight, FadeOutLeft } from 'react-native-reanimated';
-import { ArrowRight, Check, Droplets, Moon, Sparkles } from 'lucide-react-native';
+import { ArrowLeft, ArrowRight, Check, Droplets, Moon } from 'lucide-react-native';
+import { Logo } from '@/ui/Logo';
 import { CATEGORIES } from '@/domain/categories';
 import { ALL_DAYS, describeTarget, formatMinutes, formatNumber } from '@/domain/habits';
 import { formatDurationShort, todayKey } from '@/domain/dates';
@@ -16,7 +17,7 @@ import { habitIcon } from '@/features/habits/components/habitIcons';
 import { useTheme, WATER_COLOR } from '@/theme/colors';
 import { haptics } from '@/lib/haptics';
 import { showError } from '@/lib/dialogs';
-import { Button, Card, IconBadge, PressableScale, Txt, cx } from '@/ui/primitives';
+import { ActionBar, Button, Card, IconBadge, PressableScale, Txt, cx } from '@/ui/primitives';
 import { FieldLabel, Stepper, TextField } from '@/ui/form';
 import { toast } from '@/ui/toast';
 
@@ -120,9 +121,9 @@ export default function WelcomeScreen() {
             <View key={i} className={cx('h-1.5 rounded-full', i === step ? 'w-6 bg-brand-500' : 'w-1.5 bg-line dark:bg-line-dark')} />
           ))}
         </View>
-        <PressableScale onPress={() => finish(true)} disabled={saving} hitSlop={10}>
-          <Text className="text-[14px] font-semibold text-muted dark:text-muted-dark">Omitir</Text>
-        </PressableScale>
+        <Txt variant="caption">
+          Paso {step + 1} de {STEPS}
+        </Txt>
       </View>
 
       <ScrollView
@@ -134,8 +135,8 @@ export default function WelcomeScreen() {
         <Animated.View key={step} entering={FadeInRight.springify().damping(20)} exiting={FadeOutLeft.duration(150)}>
           {step === 0 ? (
             <>
-              <View className="mb-6 h-16 w-16 items-center justify-center rounded-3xl bg-brand-500">
-                <Sparkles size={30} color="#FFFFFF" />
+              <View className="mb-6 items-center">
+                <Logo size={112} />
               </View>
               <Txt variant="display">Bienvenido a Rutiva</Txt>
               <Txt variant="body" className="mt-3 text-muted dark:text-muted-dark">
@@ -233,15 +234,24 @@ export default function WelcomeScreen() {
         </Animated.View>
       </ScrollView>
 
-      {/* Acciones al alcance del pulgar */}
-      <View className="flex-row gap-3 px-5 pb-2 pt-3">
-        {step > 0 ? <Button className="flex-1" variant="secondary" title="Atrás" onPress={() => goTo(step - 1)} /> : null}
-        <Button
-          className="flex-[2]"
-          icon={step === STEPS - 1 ? Check : ArrowRight}
-          title={step === STEPS - 1 ? 'Empezar' : 'Continuar'}
-          disabled={saving}
-          onPress={() => (step === STEPS - 1 ? finish() : goTo(step + 1))}
+      {/* Acciones al alcance del pulgar: misma línea, una en cada extremo. */}
+      <View className="px-4 pb-2 pt-2">
+        <ActionBar
+          left={
+            step === 0 ? (
+              <Button variant="secondary" title="Omitir" disabled={saving} onPress={() => finish(true)} />
+            ) : (
+              <Button variant="secondary" icon={ArrowLeft} title="Atrás" disabled={saving} onPress={() => goTo(step - 1)} />
+            )
+          }
+          right={
+            <Button
+              icon={step === STEPS - 1 ? Check : ArrowRight}
+              title={step === STEPS - 1 ? 'Empezar' : 'Continuar'}
+              disabled={saving}
+              onPress={() => (step === STEPS - 1 ? finish() : goTo(step + 1))}
+            />
+          }
         />
       </View>
       </KeyboardSafe>

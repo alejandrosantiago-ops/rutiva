@@ -1,7 +1,10 @@
 import '../../global.css';
 import '@/lib/calendarLocale';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import * as SplashScreen from 'expo-splash-screen';
+import { Logo } from '@/ui/Logo';
+
 import { ActivityIndicator, Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider } from 'expo-router';
@@ -13,6 +16,13 @@ import { Button, Txt } from '@/ui/primitives';
 import { ToastHost } from '@/ui/toast';
 import { RotateCcw } from 'lucide-react-native';
 import type { ErrorBoundaryProps } from 'expo-router';
+
+// El logo nativo se mantiene hasta que los datos estén listos (ver abajo).
+SplashScreen.preventAutoHideAsync().catch(() => undefined);
+SplashScreen.setOptions({ fade: true, duration: 350 });
+
+/** Tiempo mínimo con el logo en pantalla, para que se vea y no parpadee. */
+const MIN_SPLASH_MS = 800;
 
 function useNotificationNavigation() {
   useEffect(() => {
@@ -44,7 +54,16 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 }
 
 export default function RootLayout() {
-  const { ready, error, retry } = useBootstrap();
+  const { ready: dataReady, error, retry } = useBootstrap();
+  const [minElapsed, setMinElapsed] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => setMinElapsed(true), MIN_SPLASH_MS);
+    return () => clearTimeout(id);
+  }, []);
+  const ready = dataReady && minElapsed;
+  useEffect(() => {
+    if (ready || error) SplashScreen.hideAsync().catch(() => undefined);
+  }, [ready, error]);
   const t = useTheme();
   useNotificationNavigation();
 
@@ -71,7 +90,13 @@ export default function RootLayout() {
                 <Button className="mt-6 w-48" title="Reintentar" icon={RotateCcw} onPress={retry} />
               </>
             ) : (
-              <ActivityIndicator color={t.brand} />
+              <>
+                <Logo size={128} />
+                <Txt variant="title" className="mt-5">
+                  Rutiva
+                </Txt>
+                <ActivityIndicator className="mt-6" color={t.brand} />
+              </>
             )}
           </View>
         ) : (

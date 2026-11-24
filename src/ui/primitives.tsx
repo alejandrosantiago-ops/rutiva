@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Pressable, type PressableProps, Text, type TextProps, View, type ViewProps } from 'react-native';
+import { Pressable, type PressableProps, StyleSheet, Text, type TextProps, View, type ViewProps } from 'react-native';
 import { cssInterop } from 'nativewind';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import type { LucideIcon } from 'lucide-react-native';
@@ -41,11 +41,17 @@ export function Card({ className, ...props }: ViewProps & { className?: string }
 // ---------- Pressable con micro-animación de escala ----------
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
-cssInterop(AnimatedPressable, { className: 'style' });
 
 export type PressableScaleProps = PressableProps & { className?: string; scaleTo?: number; haptic?: boolean };
 
-export function PressableScale({
+/*
+ * NativeWind no convierte bien `className` en estilos cuando se registra
+ * directamente un componente animado de Reanimated: en Android/iOS se perdían
+ * fondos, bordes, rellenos y anchos (en web sí funcionaba). Por eso se
+ * registra este componente normal: NativeWind le entrega `style` ya resuelto
+ * y aquí se combina con la animación de escala.
+ */
+function PressableScaleBase({
   scaleTo = 0.97,
   haptic = false,
   style,
@@ -53,13 +59,14 @@ export function PressableScale({
   onPressOut,
   onPress,
   ...rest
-}: PressableScaleProps) {
+}: Omit<PressableScaleProps, 'className'>) {
   const scale = useSharedValue(1);
   const animated = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const resolved = typeof style === 'function' ? undefined : StyleSheet.flatten(style);
   return (
     <AnimatedPressable
       {...rest}
-      style={[animated, style as object]}
+      style={[resolved, animated]}
       onPressIn={(e) => {
         scale.set(withSpring(scaleTo, { damping: 18, stiffness: 420 }));
         onPressIn?.(e);
@@ -76,15 +83,21 @@ export function PressableScale({
   );
 }
 
+cssInterop(PressableScaleBase, { className: 'style' });
+
+/** Pressable con micro-animación de escala y soporte completo de `className`. */
+export const PressableScale = PressableScaleBase as (props: PressableScaleProps) => ReturnType<typeof PressableScaleBase>;
+
 // ---------- Botones ----------
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
 const BUTTON_BG: Record<ButtonVariant, string> = {
   primary: 'bg-brand-500 dark:bg-brand-400',
-  secondary: 'bg-subtle dark:bg-subtle-dark',
-  ghost: 'bg-transparent',
-  danger: 'bg-danger/10',
+  // Todas las variantes se ven como una tarjeta pulsable (nunca solo texto).
+  secondary: 'border border-line bg-card dark:border-line-dark dark:bg-card-dark',
+  ghost: 'border border-brand-200 bg-brand-50 dark:border-brand-800 dark:bg-brand-900/40',
+  danger: 'border border-danger/30 bg-danger/10',
 };
 
 const BUTTON_TEXT: Record<ButtonVariant, string> = {
@@ -256,5 +269,25 @@ export function StatTile({
         </Txt>
       ) : null}
     </Card>
+  );
+}
+
+// ---------- Barra de acciones ----------
+
+/**
+ * Tarjeta inferior con dos acciones alineadas en la misma línea, una en cada
+ * extremo (p. ej. "Atrás" a la izquierda y "Continuar" a la derecha).
+ */
+export function ActionBar({ left, right, className }: { left?: ReactNode; right: ReactNode; className?: string }) {
+  return (
+    <View
+      className={cx(
+        'flex-row items-center justify-between gap-3 rounded-3xl border border-line bg-card p-2.5 dark:border-line-dark dark:bg-card-dark',
+        className,
+      )}
+    >
+      <View className="min-w-0 flex-1 items-start">{left ?? null}</View>
+      <View className="min-w-0 flex-1 items-end">{right}</View>
+    </View>
   );
 }

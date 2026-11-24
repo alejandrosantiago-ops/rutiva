@@ -71,7 +71,12 @@ function ProgressControl({ habit, value, onPress }: { habit: Habit; value: numbe
           </ProgressRing>
         ) : (
           <View className="h-11 w-11 items-center justify-center rounded-full border-2" style={{ borderColor: done ? habit.color : t.line }}>
-            <Animated.View style={[{ backgroundColor: habit.color }, fillStyle]} className="absolute h-11 w-11 items-center justify-center rounded-full">
+            <Animated.View
+              style={[
+                { position: 'absolute', width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: habit.color },
+                fillStyle,
+              ]}
+            >
               <Check size={22} color="#FFFFFF" strokeWidth={3} />
             </Animated.View>
           </View>
