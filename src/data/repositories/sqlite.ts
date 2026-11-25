@@ -16,6 +16,10 @@ import type {
 import type { Db, SqlValue } from '../db/types';
 import { daysToMask, scheduleRows } from '../db/v4';
 import type { BackupPayload, Repositories } from './types';
+import { SYNCED_SETTINGS, type SyncChanges } from '../sync/engine';
+
+const SETTINGS_STAMP = '__settingsUpdatedAt';
+const SYNCED_SETTING_KEYS = new Set<string>(SYNCED_SETTINGS);
 
 /**
  * Implementación SQLite de los repositorios sobre el esquema relacional (v4).
@@ -404,7 +408,146 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
     };
   }
 
+  // ---------- Sincronización (lado local) ----------
+
+  /** Escribe un hábito recibido conservando su updated_at (no genera un cambio nuevo). */
+  async function upsertHabit(db: Db, h: Habit) {
+    const ts = h.updatedAt;
+    const exists = await db.getFirstAsync('SELECT id FROM habits WHERE id = ?', h.id);
+    if (!exists) {
+      await insertHabitRow(db, h);
+    } else {
+      await db.runAsync(
+        `UPDATE habits SET name = ?, description = ?, category_id = ?, icon = ?, color = ?, tracking_type = ?, unit = ?, start_date = ?,
+           end_date = ?, suggested_time = ?, archived = ?, sort_order = ?, updated_at = ?, deleted_at = ? WHERE id = ?`,
+        h.name, h.description, h.category, h.icon, h.color, h.trackingType, h.unit, h.startDate, h.endDate, h.suggestedTime,
+        h.archived ? 1 : 0, h.sortOrder, h.updatedAt, h.deletedAt, h.id,
+      );
+    }
+    await writeSchedules(db, h, ts);
+    await writePauses(db, h, ts);
+    await writeAlarms(db, { ...h, remindersEnabled: h.remindersEnabled ?? true, reminderMessages: h.reminderMessages ?? {} }, ts);
+  }
+
+  const syncSource = {
+    async changesSince(since: string | null): Promise<SyncChanges> {
+      const db = await getDb();
+      const after = since ?? '';
+      const habits = await loadHabits(db, 'h.updated_at > ?', after);
+      const logs = await db.getAllAsync<LogRow>('SELECT * FROM habit_logs WHERE updated_at > ?', after);
+      const water = await db.getAllAsync<WaterRow>('SELECT * FROM water_logs WHERE updated_at > ?', after);
+      const sleep = await db.getAllAsync<SleepRow>('SELECT * FROM sleep_logs WHERE updated_at > ?', after);
+      const stampRow = await db.getFirstAsync<{ value: string }>('SELECT value FROM user_settings WHERE key = ?', SETTINGS_STAMP);
+      const stamp = stampRow ? parseJson<string>(stampRow.value, '') : '';
+      let settings: SyncChanges['settings'] = null;
+      if (stamp && stamp > after) {
+        const all = await repos.settings.load();
+        const data: Record<string, unknown> = {};
+        for (const k of SYNCED_SETTINGS) if (all[k] !== undefined) data[k] = all[k];
+        settings = { data, updatedAt: stamp };
+      }
+      return {
+        habits: habits.map((h) => ({ ...h, notificationIds: [] })),
+        logs: logs.map(toLog),
+        water: water.map(toWater),
+        sleep: sleep.map(toSleep),
+        settings,
+      };
+    },
+
+    async apply(c: SyncChanges): Promise<number> {
+      const db = await getDb();
+      let applied = 0;
+      await db.withTransactionAsync(async () => {
+        for (const h of c.habits) {
+          const local = await db.getFirstAsync<{ updated_at: string }>('SELECT updated_at FROM habits WHERE id = ?', h.id);
+          if (local && local.updated_at >= h.updatedAt) continue;
+          await upsertHabit(db, h);
+          applied++;
+        }
+        for (const l of c.logs) {
+          if (!(await db.getFirstAsync('SELECT id FROM habits WHERE id = ?', l.habitId))) continue;
+          const local = await db.getFirstAsync<LogRow>('SELECT * FROM habit_logs WHERE habit_id = ? AND date = ?', l.habitId, l.date);
+          if (local && local.updated_at >= l.updatedAt) continue;
+          if (local) {
+            await db.runAsync('UPDATE habit_logs SET value = ?, updated_at = ?, deleted_at = ? WHERE id = ?', l.value, l.updatedAt, l.deletedAt, local.id);
+          } else {
+            await db.runAsync(
+              'INSERT INTO habit_logs (id, habit_id, date, value, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+              l.id, l.habitId, l.date, l.value, l.createdAt, l.updatedAt, l.deletedAt,
+            );
+          }
+          applied++;
+        }
+        for (const w of c.water) {
+          const local = await db.getFirstAsync<WaterRow>('SELECT * FROM water_logs WHERE id = ?', w.id);
+          if (local && local.updated_at >= w.updatedAt) continue;
+          await db.runAsync(
+            `INSERT INTO water_logs (id, date, amount_ml, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT (id) DO UPDATE SET date = excluded.date, amount_ml = excluded.amount_ml, updated_at = excluded.updated_at,
+               deleted_at = excluded.deleted_at`,
+            w.id, w.date, w.amountMl, w.createdAt, w.updatedAt, w.deletedAt,
+          );
+          applied++;
+        }
+        for (const n of c.sleep) {
+          const local = await db.getFirstAsync<SleepRow>('SELECT * FROM sleep_logs WHERE id = ?', n.id);
+          if (local && local.updated_at >= n.updatedAt) continue;
+          let deletedAt = n.deletedAt;
+          let updatedAt = n.updatedAt;
+          if (!deletedAt) {
+            // Una noche activa por fecha: si choca con otra local, gana la más reciente.
+            const other = await db.getFirstAsync<SleepRow>(
+              'SELECT * FROM sleep_logs WHERE date = ? AND id != ? AND deleted_at IS NULL',
+              n.date,
+              n.id,
+            );
+            if (other && other.updated_at > n.updatedAt) {
+              deletedAt = other.updated_at;
+              updatedAt = other.updated_at;
+            } else if (other) {
+              await db.runAsync('UPDATE sleep_logs SET deleted_at = ?, updated_at = ? WHERE id = ?', n.updatedAt, n.updatedAt, other.id);
+            }
+          }
+          await db.runAsync(
+            `INSERT INTO sleep_logs (id, date, bedtime_at, wake_at, duration_minutes, latency_minutes, quality, notes, source, external_id,
+               created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (id) DO UPDATE SET date = excluded.date, bedtime_at = excluded.bedtime_at, wake_at = excluded.wake_at,
+               duration_minutes = excluded.duration_minutes, latency_minutes = excluded.latency_minutes, quality = excluded.quality,
+               notes = excluded.notes, source = excluded.source, external_id = excluded.external_id, updated_at = excluded.updated_at,
+               deleted_at = excluded.deleted_at`,
+            n.id, n.date, n.bedtimeAt, n.wakeAt, n.durationMinutes, n.latencyMinutes, n.quality, n.notes, n.source, n.externalId,
+            n.createdAt, updatedAt, deletedAt,
+          );
+          applied++;
+        }
+        if (c.settings) {
+          const stampRow = await db.getFirstAsync<{ value: string }>('SELECT value FROM user_settings WHERE key = ?', SETTINGS_STAMP);
+          const stamp = stampRow ? parseJson<string>(stampRow.value, '') : '';
+          if (c.settings.updatedAt > stamp) {
+            for (const [key, value] of Object.entries(c.settings.data)) {
+              if (!SYNCED_SETTING_KEYS.has(key)) continue;
+              await db.runAsync(
+                'INSERT INTO user_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
+                key,
+                JSON.stringify(value),
+              );
+            }
+            await db.runAsync(
+              'INSERT INTO user_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
+              SETTINGS_STAMP,
+              JSON.stringify(c.settings.updatedAt),
+            );
+            applied++;
+          }
+        }
+      });
+      return applied;
+    },
+  };
+
   const repos: Repositories = {
+    sync: syncSource,
     habits: {
       async list() {
         return loadHabits(await getDb());
@@ -706,7 +849,10 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
         const db = await getDb();
         const rows = await db.getAllAsync<{ key: string; value: string }>('SELECT key, value FROM user_settings');
         const out: Record<string, unknown> = {};
-        for (const r of rows) if (!ALARM_KEYS.has(r.key as keyof AppSettings)) out[r.key] = parseJson(r.value, undefined);
+        for (const r of rows) {
+          if (r.key.startsWith('__') || ALARM_KEYS.has(r.key as keyof AppSettings)) continue;
+          out[r.key] = parseJson(r.value, undefined);
+        }
         const bedtime = await singleton(db, 'bedtime');
         const water = await singleton(db, 'water');
         const [bedtimeIds, waterIds] = await Promise.all([notificationIds(db, 'bedtime'), notificationIds(db, 'water')]);
@@ -731,6 +877,14 @@ export function createSqliteRepositories({ getDb, uuid, now = () => new Date().t
             key,
             JSON.stringify(value),
           );
+          // Los ajustes que se sincronizan llevan una marca de tiempo común.
+          if (SYNCED_SETTING_KEYS.has(key)) {
+            await db.runAsync(
+              'INSERT INTO user_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
+              SETTINGS_STAMP,
+              JSON.stringify(now()),
+            );
+          }
           return;
         }
         // Ajustes de recordatorios: viven en la tabla de alarmas.

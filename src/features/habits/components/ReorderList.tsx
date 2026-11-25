@@ -10,11 +10,11 @@ import { useTheme } from '@/theme/colors';
 import { haptics } from '@/lib/haptics';
 import { IconBadge, Txt } from '@/ui/primitives';
 import { habitIcon } from './habitIcons';
+import { moveTo, orderOf, type Positions } from './reorder';
 
 /** Altura fija de cada fila (tarjeta + separación), necesaria para calcular posiciones. */
 const ROW = 80;
 
-type Positions = Record<string, number>;
 
 function Row({
   habit,
@@ -51,11 +51,8 @@ function Row({
       const target = Math.max(0, Math.min(count - 1, Math.round(top.value / ROW)));
       const current = positions.value[habit.id];
       if (target !== current) {
-        // Intercambia el sitio con la fila que ocupaba la nueva posición.
-        const next = { ...positions.value };
-        for (const id in next) if (next[id] === target) next[id] = current;
-        next[habit.id] = target;
-        positions.set(next);
+        // Mueve la fila y desplaza las que quedan en medio (no un simple intercambio).
+        positions.set(moveTo(positions.value, habit.id, target));
         scheduleOnRN(haptics.selection);
       }
     },
@@ -115,10 +112,7 @@ export function ReorderList({ habits, onReorder }: { habits: Habit[]; onReorder:
   const [items] = useState(habits);
 
   const commit = () => {
-    const order = Object.entries(positions.value)
-      .sort((a, b) => a[1] - b[1])
-      .map(([id]) => id);
-    onReorder(order);
+    onReorder(orderOf(positions.value));
   };
 
   return (

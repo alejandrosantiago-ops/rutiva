@@ -94,7 +94,9 @@ export default function AlarmsScreen() {
               ? hasSystem
                 ? '«Reloj del sistema» crea una alarma real en tu app Reloj: suena hasta que la apagas, a pantalla completa y aunque Rutiva esté cerrada. «Aviso de Rutiva» es una notificación con sonido de alarma y botón de posponer.'
                 : 'Estás usando Expo Go: solo está disponible «Aviso de Rutiva» (notificación exacta con sonido de alarma). La alarma real del Reloj se activa al instalar la app.'
-              : 'En iOS las apps no pueden crear alarmas del sistema (salvo con AlarmKit en iOS 26+). Rutiva usa un aviso con sonido y prioridad alta: respeta el volumen y el modo silencio del iPhone.'}
+              : Platform.OS === 'ios'
+                ? 'En iOS las apps no pueden crear alarmas del sistema (salvo con AlarmKit en iOS 26+). Rutiva usa un aviso con sonido y prioridad alta: respeta el volumen y el modo silencio del iPhone.'
+                : 'En la versión web las alarmas no pueden sonar. Usa Rutiva en tu teléfono para que suenen.'}
           </Txt>
         </Card>
       </Animated.ScrollView>

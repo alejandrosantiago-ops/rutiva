@@ -1,3 +1,4 @@
+import { useSyncStore } from '@/features/account/store/useSyncStore';
 import { applyBackup, exportBackupFile, pickBackup } from '@/features/settings/backupActions';
 import { useWakeStore } from '@/features/alarm/store/useWakeStore';
 import { toast } from '@/ui/toast';
@@ -15,6 +16,7 @@ import {
   CalendarDays,
   ChevronLeft,
   AlarmClock,
+  Cloud,
   Download,
   Upload,
   Droplets,
@@ -55,6 +57,8 @@ export default function SettingsScreen() {
   const [name, setName] = useState(settings.userName);
   const [permission, setPermission] = useState<string>('undetermined');
   const wakeCount = useWakeStore((s) => s.alarms.length);
+  const syncStatus = useSyncStore((s) => s.status);
+  const syncEmail = useSyncStore((s) => s.email);
 
   useEffect(() => {
     getPermissionStatus().then(setPermission);
@@ -233,6 +237,23 @@ export default function SettingsScreen() {
             />
           </View>
         ) : null}
+
+        <FieldLabel>Cuenta</FieldLabel>
+        <Card className="py-1">
+          <ListRow
+            icon={Cloud}
+            title="Cuenta y sincronización"
+            subtitle={
+              syncStatus === 'unconfigured'
+                ? 'Opcional · sin configurar'
+                : syncEmail
+                  ? `Sincronizando como ${syncEmail}`
+                  : 'Opcional · copia en la nube y varios dispositivos'
+            }
+            last
+            onPress={() => router.push('/account')}
+          />
+        </Card>
 
         <FieldLabel>Despertador</FieldLabel>
         <Card className="py-1">

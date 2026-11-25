@@ -197,3 +197,14 @@ test('v4 → v5 conserva alarmas y avisos programados', async () => {
   assert.equal(s.bedtimeReminderTime, '23:00');
   assert.equal(s.bedtimeNotificationId, 'b1');
 });
+
+test('reordenar: mover desplaza los intermedios (no intercambia)', async () => {
+  const { moveTo, orderOf } = await import('../src/features/habits/components/reorder.ts');
+  const start = { a: 0, b: 1, c: 2, d: 3 };
+  assert.deepEqual(orderOf(moveTo(start, 'd', 0)), ['d', 'a', 'b', 'c'], 'de abajo arriba');
+  assert.deepEqual(orderOf(moveTo(start, 'a', 2)), ['b', 'c', 'a', 'd'], 'de arriba abajo');
+  assert.equal(moveTo(start, 'b', 1), start, 'sin cambios');
+  // Arrastre real: muchos pasos pequeños dan el mismo resultado que un salto.
+  const stepwise = moveTo(moveTo(moveTo(start, 'd', 2), 'd', 1), 'd', 0);
+  assert.deepEqual(orderOf(stepwise), ['d', 'a', 'b', 'c']);
+});

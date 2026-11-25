@@ -37,10 +37,27 @@ Expo SDK 58 · React Native 0.88 · TypeScript · Expo Router · NativeWind 4 (T
   - *Registro manual*: hora de acostarse y de despertar (cruza la medianoche), minutos hasta dormirte, calidad (1–5) y notas; los registros anteriores se pueden corregir.
   - *Temporizador*: «Voy a dormir» guarda la hora exacta y «Me desperté» abre el registro para revisarlo. La sesión sobrevive a cerrar la app. Estos registros se marcan como **Estimado**: un temporizador mide tiempo en cama y **no detecta si estás dormido**.
   - Estadísticas: horas por noche, promedio semanal y mensual, meta configurable, gráfico real frente a objetivo, diferencia con la meta, deuda de sueño, horas medias e historial completo por meses. Recordatorio nocturno configurable desde la propia pantalla.
-  - Preparado para **Health Connect** (Android) y **HealthKit** (iOS) en `src/services/health/`: contrato, adaptadores e importador que pide permiso explícito, solo lee sesiones de sueño y no duplica ni pisa registros manuales. Activarlo requiere un *development build* (ver comentarios en `providers.ts`).
+  - **Health Connect** (Android) implementado en `src/services/health/`: pide permiso explícito, solo lee sesiones de sueño, descuenta el tiempo despierto y no duplica ni pisa registros manuales. Requiere la app instalada (no Expo Go). **HealthKit** (iOS) queda preparado; activarlo exige compilar en un Mac (ver `providers.ts`).
 - **Calendario**: mes actual con navegación, días completos (relleno), parciales (tono + porcentaje), sin cumplir (punto rojo) y en pausa (guion), día actual resaltado y resumen del mes. Al tocar una fecha muestra cada hábito con su estado («completado», «2.5 / 2.5 L», «no completado») y el progreso total; desde ahí se pueden corregir los registros. Filtro por hábito individual (incluidos los archivados).
 - **Estadísticas** (siempre desde registros reales): cumplimiento de hoy, de la semana y del mes; racha actual y mejor racha histórica de días completos; gráfico de líneas diario, barras semanales y calendario de actividad; hábitos con mayor y menor cumplimiento; horas totales de entrenamiento y de estudio; agua de hoy y promedio diario; promedio de sueño; rendimiento por día de la semana.
 - **Configuración**: nombre, tema, notificaciones, recordatorio nocturno, metas, inicio de semana, vibración, exportar copia y restablecer.
+
+- **Despertador** (Configuración o Sueño → Despertador): varias alarmas con hora, días, nombre, sonido, posponer y activación. Al sonar abre una pantalla de **buenos días** con los hábitos pendientes. Ver *Alarmas reales* más abajo.
+- **Recordatorios**: uno o varios por hábito, diarios o semanales, con **mensaje propio** («Hora de entrenar») o uno según la categoría; se pueden **activar o desactivar** sin perder las horas. Se reprograman al editar y se cancelan al pausar, archivar o eliminar. Tocar un aviso abre su pantalla, también con la app cerrada.
+- **Cronómetro**: Iniciar, Pausar, Continuar y Finalizar; sesiones guardadas en SQLite, aviso fijo mientras corre y aviso al llegar a la meta.
+- **Copias de seguridad**: exportar a un archivo `.json` (menú compartir) e **importar** (también copias de versiones anteriores), con confirmación.
+- **Ordenar hábitos** arrastrando el asa de cada tarjeta (Hábitos → Ordenar).
+- **Health Connect** (Android): importar el sueño de los últimos 30 días, con permiso solo de lectura.
+- **Cuenta y sincronización** opcional con Supabase (ver más abajo).
+
+### Alarmas reales
+
+| | Android | iOS |
+| --- | --- | --- |
+| **Reloj del sistema** | Alarma real en la app Reloj (`AlarmClock.ACTION_SET_ALARM`, módulo nativo `modules/rutiva-alarm`): suena hasta apagarla, a pantalla completa, con Rutiva cerrada. Requiere la app instalada (no Expo Go). Para borrarla o cambiarla después, hay que hacerlo también en el Reloj: Android no permite a otras apps modificar esas alarmas. | No existe: iOS no deja crear alarmas del sistema (salvo AlarmKit en iOS 26+). |
+| **Aviso de Rutiva** | Notificación exacta (`setAlarmClock`), canal con audio de **alarma**, salta el No molestar, posponer. Suena una vez (~25 s). | Notificación *time sensitive* con sonido; respeta el modo silencio. |
+
+Permisos de Android: `USE_EXACT_ALARM`/`SCHEDULE_EXACT_ALARM` (avisos exactos) y `SET_ALARM` (crear alarmas en el Reloj). Los sonidos son tonos propios generados con `scripts/generate-sounds.ps1`; en Expo Go se usa el sonido del sistema.
 
 ### Experiencia de uso
 
@@ -79,18 +96,24 @@ src/
     stats/       screens/ components/ (gráficos)
     settings/    screens/ store/
     onboarding/  screens/
+    alarm/       screens/ store/ (despertador, buenos días)
+    account/     screens/ store/ (cuenta y sincronización)
   domain/                  Tipos TypeScript y lógica pura (fechas, rachas, programación,
                            sueño, agua, estadísticas, cronómetro, planificación de recordatorios)
   data/
     db/                    Conexión, interfaz Db, ejecutor de migraciones y migraciones
     repositories/          Contratos + implementación SQLite (factory inyectable)
+    sync/                  Motor de sincronización y adaptador de Supabase
+    backup.ts              Lectura y validación de copias de seguridad
   services/
     notifications/         Gestión de notificaciones (planificador puro + pasarela Expo)
-    health/                Integración futura con Health Connect / HealthKit
+    health/                Health Connect (real) y HealthKit (preparado)
   ui/                      Componentes visuales compartidos (tarjetas, formularios, progreso, avisos)
   hooks/                   Hooks compartidos (arranque, fecha actual)
   lib/                     Utilidades (hápticos, diálogos, navegación, calendario)
   theme/                   Paleta y colores
+modules/rutiva-alarm/      Módulo nativo (Kotlin) para alarmas del Reloj de Android
+supabase/schema.sql        Esquema del servidor de sincronización (opcional)
 tests/                     node --test con un loader que resuelve los alias "@/"
 ```
 
@@ -128,23 +151,26 @@ Los hábitos **no se crean cada día**: la app calcula qué toca en cada fecha a
 - **Sueño**: noches que cruzan medianoche, latencia, validaciones y comparación con la meta.
 - **Rachas** por hábito y de días completos (actual y mejor).
 - **Persistencia** con `node:sqlite`: repositorios, restricciones (duplicados, claves foráneas, CHECK), borrado lógico, reinicio y migraciones v1 → v4 con datos.
-- **Recordatorios**: plan por tipo de hábito, límite de iOS, edición (cancela los anteriores) y cancelación al pausar o desactivar.
+- **Recordatorios**: plan por tipo de hábito, límite de iOS, edición (cancela los anteriores), cancelación al pausar o desactivar, mensajes personalizados y pantalla que abre cada aviso.
+- **Despertador**: avisos por día, próxima vez que suena, posponer y persistencia.
+- **Copias de seguridad**: exportar → importar sin pérdidas, copias antiguas y archivos inválidos.
+- **Health Connect**: conversión de sesiones y plan de importación (sin duplicar ni pisar registros manuales).
+- **Sincronización**: dos dispositivos contra un servidor simulado (alta, cambios, borrados, conflictos, una noche por fecha, estabilización) y conversión exacta de filas de Postgres.
 
-## Integrar Supabase o PostgreSQL más adelante
+## Sincronización con Supabase (opcional)
 
-El esquema ya está preparado para sincronizar:
+La app es *offline-first*: siempre guarda en SQLite y funciona sin internet. Si configuras Supabase e inicias sesión (Configuración → Cuenta y sincronización), los datos se copian en la nube y se comparten entre dispositivos.
 
-- ids **UUID** en todas las tablas (mapean a `uuid`);
-- `created_at` y `updated_at` en ISO-8601 (mapean a `timestamptz`), útiles para resolver conflictos por última escritura;
-- **borrado lógico** con `deleted_at`, para que las eliminaciones también se sincronicen;
-- los ids de notificaciones son locales del dispositivo y no se exportan.
+1. Crea un proyecto gratuito en [supabase.com](https://supabase.com).
+2. En **SQL Editor**, ejecuta `supabase/schema.sql` (tabla `rutiva_records` con Row Level Security y la función `rutiva_push`).
+3. Crea `.env.local` en la raíz del proyecto con los datos de **Project Settings → API**:
+   ```
+   EXPO_PUBLIC_SUPABASE_URL=https://TU-PROYECTO.supabase.co
+   EXPO_PUBLIC_SUPABASE_ANON_KEY=tu-clave-anon
+   ```
+4. Reinicia `npx expo start`. La clave *anon* es pública por diseño; la seguridad la da RLS (cada usuario solo ve sus filas).
 
-Pasos:
-
-1. Crea en Supabase las tablas del apartado *Base de datos* (ver `src/data/db/v4.ts`), excepto `scheduled_notifications`, que es local del dispositivo, y añade `user_id uuid references auth.users` con políticas RLS.
-2. Implementa la interfaz `Repositories` (`src/data/repositories/types.ts`), o mejor, un adaptador que siga escribiendo en SQLite y sincronice en segundo plano los registros con `updated_at` posterior a la última sincronización.
-3. Cambia la implementación exportada en `src/data/repositories/index.ts`. Ni los stores ni las pantallas tienen que cambiar.
-4. Añade la autenticación (Supabase Auth) como una ruta nueva en `src/app/`.
+Cómo funciona (`src/data/sync/`): se sincronizan hábitos (con programación, pausas y horas de recordatorio), cumplimientos, agua, sueño y metas/nombre. Las alarmas de despertar, los avisos programados y el cronómetro son de cada teléfono. En los conflictos gana la edición más reciente (también en el servidor, dentro de `rutiva_push`), los borrados se propagan con `deleted_at` y la descarga usa el reloj del servidor (`synced_at`), así un teléfono con la hora atrasada no hace perder cambios. Se sincroniza al abrir la app, al volver a ella (como mucho una vez por minuto) y con «Sincronizar ahora».
 
 ## Notas
 

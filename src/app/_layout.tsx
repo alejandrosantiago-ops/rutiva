@@ -144,6 +144,7 @@ export default function RootLayout() {
             <Stack.Screen name="alarms" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="alarm/[id]" options={{ presentation: 'modal' }} />
             <Stack.Screen name="morning" options={{ animation: 'fade' }} />
+            <Stack.Screen name="account" options={{ animation: 'slide_from_right' }} />
           </Stack>
         )}
         <ToastHost />

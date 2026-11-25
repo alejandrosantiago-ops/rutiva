@@ -13,6 +13,7 @@ import type {
   WakeAlarmInput,
   WaterLog,
 } from '@/domain/types';
+import type { LocalSyncSource } from '../sync/engine';
 
 /**
  * Contratos de persistencia. La UI y los stores solo dependen de estas
@@ -89,6 +90,8 @@ export interface BackupPayload {
 }
 
 export interface Repositories {
+  /** Lado local de la sincronización entre dispositivos. */
+  sync: LocalSyncSource;
   habits: HabitRepository;
   logs: HabitLogRepository;
   water: WaterRepository;

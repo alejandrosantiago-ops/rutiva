@@ -9,6 +9,8 @@ import { useSleepSessionStore } from '@/features/sleep/store/sleepSession';
 import { configureNotifications } from '@/services/notifications';
 import { configureWakeNotifications } from '@/services/notifications/wake';
 import { useWakeStore } from '@/features/alarm/store/useWakeStore';
+import { useSyncStore } from '@/features/account/store/useSyncStore';
+import { AppState } from 'react-native';
 
 /** Abre la base de datos, aplica migraciones y carga los stores. */
 export function useBootstrap() {
@@ -34,6 +36,12 @@ export function useBootstrap() {
         // Después de los hábitos: su aviso "en marcha" necesita el nombre del hábito.
         await useTimerStore.getState().load();
         if (!cancelled) setReady(true);
+        // Sincronización opcional: solo si hay cuenta; en segundo plano y sin bloquear.
+        useSyncStore
+          .getState()
+          .init()
+          .then(() => useSyncStore.getState().syncNow({ auto: true }))
+          .catch(() => undefined);
         // Renueva los recordatorios por fecha (intervalos, hábitos con fin) en segundo plano.
         configureNotifications()
           .then(() => configureWakeNotifications())
@@ -50,6 +58,14 @@ export function useBootstrap() {
       cancelled = true;
     };
   }, [attempt]);
+
+  // Al volver a la app, sincroniza si hay cuenta (como mucho una vez por minuto).
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') useSyncStore.getState().syncNow({ auto: true }).catch(() => undefined);
+    });
+    return () => sub.remove();
+  }, []);
 
   // Aplica el tema elegido (sistema / claro / oscuro) cada vez que cambia.
   useEffect(() => {
