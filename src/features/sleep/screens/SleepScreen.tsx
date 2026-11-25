@@ -9,6 +9,7 @@ import {
   BedDouble,
   Bell,
   CalendarDays,
+  Download,
   HeartPulse,
   Moon,
   Plus,
@@ -29,9 +30,10 @@ import { syncBedtimeReminder } from '@/features/sleep/store/bedtimeReminder';
 import { useToday } from '@/hooks/useToday';
 import { useTheme } from '@/theme/colors';
 import { haptics } from '@/lib/haptics';
-import { confirmAction, showAlert } from '@/lib/dialogs';
+import { confirmAction, showAlert, showError } from '@/lib/dialogs';
 import { notificationsSupported } from '@/services/notifications';
-import { platformHealthProvider } from '@/services/health/providers';
+import { AVAILABILITY_MESSAGES, platformHealthProvider } from '@/services/health/providers';
+import { importSleep } from '@/services/health/importSleep';
 import { Screen } from '@/ui/layout';
 import { Button, Card, EmptyState, IconButton, PressableScale, SectionHeader, StatTile, Txt } from '@/ui/primitives';
 import { ProgressRing } from '@/ui/progress';
@@ -141,6 +143,7 @@ export default function SleepScreen() {
   const [visible, setVisible] = useState(PAGE);
   const days = Number(range);
   const health = platformHealthProvider();
+  const [importing, setImporting] = useState(false);
   const wakeAlarms = useWakeStore((s) => s.alarms);
   const nextAlarm = useMemo(() => {
     const now = new Date();
@@ -337,14 +340,43 @@ export default function SleepScreen() {
       </Card>
 
       {health ? (
-        <Card className="mt-3 flex-row items-center gap-3">
-          <HeartPulse size={18} color={t.muted} />
-          <View className="flex-1">
-            <Txt variant="label">Importar de {health.name}</Txt>
-            <Txt variant="caption" className="mt-0.5">
-              Próximamente. Requerirá tu permiso explícito y una versión instalable de la app (no funciona en Expo Go).
-            </Txt>
+        <Card className="mt-3">
+          <View className="flex-row items-center gap-3">
+            <HeartPulse size={18} color={t.sleep} />
+            <View className="flex-1">
+              <Txt variant="label">Importar de {health.name}</Txt>
+              <Txt variant="caption" className="mt-0.5">
+                Lee tus sesiones de sueño de los últimos 30 días, solo con tu permiso. No duplica ni sustituye tus registros manuales.
+              </Txt>
+            </View>
           </View>
+          <Button
+            className="mt-3"
+            variant="secondary"
+            icon={Download}
+            title={importing ? 'Importando…' : 'Importar sueño'}
+            disabled={importing}
+            onPress={async () => {
+              setImporting(true);
+              try {
+                const availability = await health.availability();
+                if (!availability.available) {
+                  showAlert(health.name, AVAILABILITY_MESSAGES[availability.reason]);
+                  return;
+                }
+                const { imported, skipped } = await importSleep(health, 30);
+                toast(
+                  imported
+                    ? `${imported} ${imported === 1 ? 'noche importada' : 'noches importadas'}${skipped ? ` · ${skipped} ya estaban` : ''}`
+                    : 'No había noches nuevas que importar',
+                );
+              } catch (e) {
+                showError('No se pudo importar', e);
+              } finally {
+                setImporting(false);
+              }
+            }}
+          />
         </Card>
       ) : null}
 
