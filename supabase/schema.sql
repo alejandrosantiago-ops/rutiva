@@ -23,6 +23,11 @@ create index if not exists rutiva_records_user_synced on public.rutiva_records (
 
 alter table public.rutiva_records enable row level security;
 
+-- Los proyectos nuevos de Supabase no conceden permisos automáticos sobre las
+-- tablas: se dan solo a usuarios con sesión. RLS (abajo) limita a sus filas.
+grant usage on schema public to authenticated;
+grant select, insert, update on public.rutiva_records to authenticated;
+
 drop policy if exists "rutiva: leer lo propio" on public.rutiva_records;
 create policy "rutiva: leer lo propio" on public.rutiva_records
   for select using (user_id = auth.uid());
