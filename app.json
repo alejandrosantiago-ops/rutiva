@@ -75,6 +75,17 @@
         }
       ]
     ],
-    "scheme": "rutiva"
+    "scheme": "rutiva",
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "5f09cdcb-23d1-47e0-afb4-4f1fca0ee00c"
+      }
+    },
+    "owner": "alejosanm"
   }
 }
