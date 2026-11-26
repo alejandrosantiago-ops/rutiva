@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChevronLeft, Cloud, CloudOff, LogIn, LogOut, RefreshCw, ShieldCheck, UserPlus, WifiOff } from 'lucide-react-native';
+import { type LucideIcon, ChevronLeft, Cloud, CloudOff, LogIn, LogOut, RefreshCw, ShieldCheck, UserPlus, WifiOff } from 'lucide-react-native';
 import { formatDistanceToNow } from 'date-fns';
 import { es } from 'date-fns/locale/es';
 import { useSyncStore } from '@/features/account/store/useSyncStore';
@@ -12,13 +12,15 @@ import { KeyboardSafe } from '@/ui/layout';
 import { Button, Card, IconButton, Txt } from '@/ui/primitives';
 import { FieldLabel, Segmented, TextField } from '@/ui/form';
 import { toast } from '@/ui/toast';
+import { GoogleCancelled, googleUnavailableReason } from '@/services/auth/google';
 
 type Mode = 'signIn' | 'signUp';
 
 export default function AccountScreen() {
   const t = useTheme();
   const { status, email, lastSyncAt, error } = useSyncStore();
-  const { signIn, signUp, signOut, syncNow } = useSyncStore.getState();
+  const { signIn, signUp, signInWithGoogle, signOut, syncNow } = useSyncStore.getState();
+  const googleBlocked = googleUnavailableReason();
   const [mode, setMode] = useState<Mode>('signIn');
   const [form, setForm] = useState({ email: '', password: '' });
   const [busy, setBusy] = useState(false);
@@ -37,6 +39,18 @@ export default function AccountScreen() {
       }
     } catch (e) {
       showError(mode === 'signIn' ? 'No se pudo iniciar sesión' : 'No se pudo crear la cuenta', e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const google = async () => {
+    setBusy(true);
+    try {
+      const r = await signInWithGoogle();
+      toast(r === 'created' ? 'Cuenta creada con Google y datos sincronizados' : 'Sesión iniciada con Google');
+    } catch (e) {
+      if (!(e instanceof GoogleCancelled)) showError('No se pudo entrar con Google', e);
     } finally {
       setBusy(false);
     }
@@ -71,7 +85,23 @@ export default function AccountScreen() {
             </Card>
           ) : status === 'signedOut' ? (
             <>
-              <View className="mt-5">
+              <Button
+                className="mt-5"
+                variant="secondary"
+                icon={GoogleIcon as unknown as LucideIcon}
+                title={busy ? 'Un momento…' : 'Continuar con Google'}
+                disabled={busy || !!googleBlocked}
+                onPress={google}
+              />
+              <Txt variant="caption" className="mt-2 text-center leading-5">
+                {googleBlocked ?? 'Elige la cuenta de Gmail de tu teléfono: no tienes que recordar otra contraseña y Google ya verifica tu correo.'}
+              </Txt>
+              <View className="mt-5 flex-row items-center gap-3">
+                <View className="h-px flex-1 bg-line dark:bg-line-dark" />
+                <Txt variant="caption">o con tu correo</Txt>
+                <View className="h-px flex-1 bg-line dark:bg-line-dark" />
+              </View>
+              <View className="mt-4">
                 <Segmented<Mode>
                   value={mode}
                   onChange={setMode}
@@ -165,5 +195,14 @@ export default function AccountScreen() {
         </ScrollView>
       </KeyboardSafe>
     </SafeAreaView>
+  );
+}
+
+/** Icono "G" para el botón de Google, con la misma firma que los iconos de Lucide. */
+function GoogleIcon({ size = 20, color }: { size?: number; color?: string }) {
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <Txt style={{ fontSize: size * 0.85, fontWeight: '800', color, lineHeight: size }}>G</Txt>
+    </View>
   );
 }

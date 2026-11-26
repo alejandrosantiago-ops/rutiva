@@ -7,6 +7,7 @@ import { useHabitStore } from '@/features/habits/store/useHabitStore';
 import { useSleepStore } from '@/features/sleep/store/useSleepStore';
 import { useWaterStore } from '@/features/water/store/useWaterStore';
 import { useSettingsStore } from '@/features/settings/store/useSettingsStore';
+import { googleIdToken, googleSignOut } from '@/services/auth/google';
 
 /*
  * Cuenta y sincronización (opcional). Sin configuración o sin sesión, la app
@@ -27,6 +28,8 @@ interface SyncStore {
   init: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<'signedIn' | 'confirmEmail'>;
+  /** Entra (o crea la cuenta) con la cuenta de Google del teléfono. */
+  signInWithGoogle: () => Promise<'created' | 'signedIn'>;
   signOut: () => Promise<void>;
   /** Sincroniza ahora. `auto` respeta un intervalo mínimo y no muestra errores. */
   syncNow: (opts?: { auto?: boolean }) => Promise<{ pulled: number; pushed: number } | null>;
@@ -80,8 +83,20 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     return 'signedIn';
   },
 
+  async signInWithGoogle() {
+    const token = await googleIdToken();
+    const { data, error } = await supabase().auth.signInWithIdToken({ provider: 'google', token });
+    if (error) throw new Error(/provider is not enabled|Unsupported provider/i.test(error.message) ? 'Activa Google en Supabase (Authentication → Providers).' : error.message);
+    set({ email: data.user?.email ?? null, status: 'idle', error: null });
+    await get().syncNow();
+    // Cuenta nueva si se creó hace menos de un minuto.
+    const created = data.user?.created_at ? Date.now() - new Date(data.user.created_at).getTime() < 60_000 : false;
+    return created ? 'created' : 'signedIn';
+  },
+
   async signOut() {
     await supabase().auth.signOut();
+    await googleSignOut();
     // Los datos locales se conservan; solo se olvida el progreso de sincronización.
     await AsyncStorage.removeItem(STATE_KEY);
     await AsyncStorage.removeItem(LAST_KEY);

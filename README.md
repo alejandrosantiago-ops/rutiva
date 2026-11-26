@@ -170,6 +170,16 @@ La app es *offline-first*: siempre guarda en SQLite y funciona sin internet. Si 
    ```
 4. Reinicia `npx expo start`. La clave *anon* es pública por diseño; la seguridad la da RLS (cada usuario solo ve sus filas).
 
+### Entrar con Google (opcional)
+
+El botón «Continuar con Google» usa la cuenta de Gmail del teléfono (selector nativo de Android) y crea la cuenta de Supabase sin contraseña; el correo queda verificado por Google. Si ya existía una cuenta con correo y contraseña con el mismo Gmail, Supabase las vincula. Solo funciona en la app instalada (no en Expo Go ni en la web).
+
+1. En [Google Cloud Console](https://console.cloud.google.com) crea un proyecto y configura la pantalla de consentimiento (**Google Auth Platform → Branding / Audience**: tipo *External* y **Publicar la app**, si no solo podrán entrar los usuarios de prueba).
+2. **Clients → Create client → Web application**. En *Authorized redirect URIs* añade `https://TU-PROYECTO.supabase.co/auth/v1/callback`. Guarda el *Client ID* y el *Client secret*.
+3. **Create client → Android**: paquete `com.rutiva.app` y la huella **SHA-1** de la firma (expo.dev → proyecto → *Credentials* → Android).
+4. En Supabase, **Authentication → Sign In / Providers → Google**: actívalo, pon el *Client ID* web en *Client IDs* y el *Client secret*.
+5. Añade el ID web como variable `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` en `.env.local` y en EAS (`eas env:create`), y vuelve a compilar el APK. Para iOS haría falta además un cliente iOS (`EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`) y el plugin con `iosUrlScheme`.
+
 Cómo funciona (`src/data/sync/`): se sincronizan hábitos (con programación, pausas y horas de recordatorio), cumplimientos, agua, sueño y metas/nombre. Las alarmas de despertar, los avisos programados y el cronómetro son de cada teléfono. En los conflictos gana la edición más reciente (también en el servidor, dentro de `rutiva_push`), los borrados se propagan con `deleted_at` y la descarga usa el reloj del servidor (`synced_at`), así un teléfono con la hora atrasada no hace perder cambios. Se sincroniza al abrir la app, al volver a ella (como mucho una vez por minuto) y con «Sincronizar ahora».
 
 ## Notas
